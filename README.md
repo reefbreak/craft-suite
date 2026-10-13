@@ -17,6 +17,7 @@ docs, and can be updated from its upstream.
 | `vectorcraft`    | VectorCraft    | `vectorcraft`       | vector illustration                               |
 | `designcraft`    | DesignCraft    | `designcraft`       | page layout                                       |
 | `deckcraft`      | DeckCraft      | `deckcraft`         | presentations                                     |
+| `wordcraft`      | WordCraft      | `wordcraft`         | word processor (.docx)                            |
 | `gridcraft`      | GridCraft      | `gridcraft`         | spreadsheets                                      |
 | `cadcraft`       | CADCraft       | `cadcraft`          | CAD and drafting                                  |
 | `printcraft`     | PrintCraft     | `pdfcraft`          | PDF editor                                        |
@@ -31,6 +32,7 @@ cd gesso       && cargo build --release -p gesso
 cd filmcraft   && cargo build --release -p filmcraft
 cd photocraft  && cargo build --release -p photocraft
 cd printcraft  && cargo build --release -p pdfcraft
+cd wordcraft   && cargo build --release -p wordcraft
 # …and likewise effectcraft, lightcraft, vectorcraft, designcraft, deckcraft, gridcraft, cadcraft
 ```
 
@@ -52,6 +54,7 @@ the details. Gesso's local-mode setup is in
 | VectorCraft | image               | placed in the open document                |
 | DesignCraft | image               | placed in the open layout                  |
 | DeckCraft   | image               | inserted on the current slide              |
+| WordCraft   | image               | inserted at the cursor in the document     |
 | GridCraft   | image               | inserted as a picture in the open workbook |
 | PrintCraft  | image               | made into a PDF                            |
 
