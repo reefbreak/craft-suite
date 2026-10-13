@@ -2,13 +2,13 @@
 # Pulls each app's upstream into its folder (git subtree, squashed).
 #   scripts/sync-upstream.sh            every app
 #   scripts/sync-upstream.sh filmcraft  one app
-# ArtCraft comes from the reefbreak fork (branch local-providers), which carries the local-mode
-# changes; sync that fork with storytold/artcraft first, then run this.
+# Gesso comes from the reefbreak/artcraft fork (branch local-providers): ArtCraft renamed Gesso,
+# with the local-mode changes. Sync that fork with storytold/artcraft first, then run this.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 declare -A SOURCES=(
-  [artcraft]="https://github.com/reefbreak/artcraft local-providers"
+  [gesso]="https://github.com/reefbreak/artcraft local-providers"
   [filmcraft]="https://github.com/storytold/filmcraft main"
   [photocraft]="https://github.com/storytold/photocraft main"
   [vectorcraft]="https://github.com/storytold/vectorcraft main"
@@ -28,7 +28,7 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 apps=("$@")
-[ ${#apps[@]} -eq 0 ] && apps=(artcraft filmcraft photocraft vectorcraft lightcraft printcraft effectcraft designcraft deckcraft gridcraft cadcraft craft-launcher)
+[ ${#apps[@]} -eq 0 ] && apps=(gesso filmcraft photocraft vectorcraft lightcraft printcraft effectcraft designcraft deckcraft gridcraft cadcraft craft-launcher)
 for app in "${apps[@]}"; do
   read -r url branch <<< "${SOURCES[$app]:?unknown app: $app}"
   echo "== $app <- $url $branch"
