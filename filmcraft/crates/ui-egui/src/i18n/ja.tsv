@@ -3594,3 +3594,10 @@
 	Export the labels to a preset file…	ラベルをプリセットファイルに書き出し…
 	Show the presets folder	プリセットフォルダーを表示
 	Delete this preset	このプリセットを削除
+	Send to ArtCraft	ArtCraft に送信
+	Current Frame	現在のフレーム
+	Active Sequence	アクティブなシーケンス
+	Sending {name} to ArtCraft…	{name} を ArtCraft に送信しています…
+	Sent to ArtCraft: {name}	ArtCraft に送信しました: {name}
+	Send to ArtCraft failed: {error}	ArtCraft への送信に失敗しました: {error}
+	Send to ArtCraft cancelled	ArtCraft への送信をキャンセルしました

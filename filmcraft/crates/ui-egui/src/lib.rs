@@ -1695,6 +1695,9 @@ impl FilmcraftApp {
         self.auto.begin_frame();
         self.frames.set_context(&ctx);
         self.session.poll_persistence();
+        for sent in self.session.artcraft.take_finished() {
+            self.ui.status = menus::artcraft_status(&sent);
+        }
         panels::trim_monitor::advance(self, &ctx);
         if self.session.persistence.is_some() && self.session.is_dirty() {
             // Keep polling the auto-save worker (status, "also save the project" results).

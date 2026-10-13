@@ -3568,3 +3568,10 @@
 	Export the labels to a preset file…	Exporter les étiquettes dans un fichier de paramètre prédéfini…
 	Show the presets folder	Afficher le dossier des paramètres prédéfinis
 	Delete this preset	Supprimer ce paramètre prédéfini
+	Send to ArtCraft	Envoyer vers ArtCraft
+	Current Frame	Image actuelle
+	Active Sequence	Séquence active
+	Sending {name} to ArtCraft…	Envoi de {name} vers ArtCraft…
+	Sent to ArtCraft: {name}	Envoyé vers ArtCraft : {name}
+	Send to ArtCraft failed: {error}	Échec de l'envoi vers ArtCraft : {error}
+	Send to ArtCraft cancelled	Envoi vers ArtCraft annulé

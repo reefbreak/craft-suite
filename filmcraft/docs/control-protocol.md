@@ -159,6 +159,20 @@ sequence as tone-mapped SDR.
 Ctrl), `Ctrl` (macOS ⌃), `Alt`, `Shift`. The dialog (Edit ▸ Keyboard Shortcuts…, ⌥⌘K) uses ids
 `shortcuts.*` (`shortcuts.key.K`, `shortcuts.cell.<command>`, `shortcuts.ok`, …).
 
+**Send to ArtCraft** (File ▸ Send to ArtCraft, `crates/engine/src/artcraft.rs`) hands media to the
+ArtCraft app through its inbox folder, `~/Artcraft/inbox` (created when missing; `dir` overrides it).
+ArtCraft imports every complete file there and ignores hidden files, `.part` / `.tmp` names and files
+modified in the last 2 s. Files are written under a hidden name in the inbox
+(`.FilmCraft - <name>.<pid>-<n>.<ext>`) and get their final name only when complete:
+`FilmCraft - <name>.<ext>`, or `FilmCraft - <name> 2.<ext>`, ` 3`… when that name exists (nothing is
+overwritten). A failed or cancelled send deletes the hidden file. Both commands are disabled in the
+web app.
+
+| Command | Params | Result |
+|---|---|---|
+| `file.sendFrameToArtcraft` (Current Frame) | `{dir?, target?: "program"\|"source", item?, sequence?, time?}` | `{path, width, height, target, time}`: a PNG of the Program monitor frame (`target` and the rest as in `file.exportFrame`; from the menus, the focused monitor, as Export Frame does). `<name>` is the sequence or clip name |
+| `file.sendSequenceToArtcraft` (Active Sequence) | `{dir?, sequence?, wait?: bool}` | The active (or `sequence`) sequence, entire range, as H.264 MP4 with audio, through `file.exportMedia`, as a background job: `{job, name, partial, dir, finished: false}` (the job is in `jobs.list`; `jobs.cancel` stops it). The per-frame poll (`Session::poll_persistence`, or `pump_jobs` on hosts without threads) renames the file when the job succeeds; the status bar then shows "Sent to ArtCraft: <file>" or the failure. With `wait: true` it returns `{job, path, finished: true}` once the file has its final name |
+
 ## MCP
 `filmcraft-cli mcp` serves MCP on stdio: headless (in-process session; `--demo` / `--project p.fcproj`)
 or `--bridge 127.0.0.1:9876` to drive the running app. Tools: `command_list`, `command_run`,

@@ -3570,3 +3570,10 @@
 	Export the labels to a preset file…	将标签导出为预设文件…
 	Show the presets folder	显示预设文件夹
 	Delete this preset	删除此预设
+	Send to ArtCraft	发送到 ArtCraft
+	Current Frame	当前帧
+	Active Sequence	当前序列
+	Sending {name} to ArtCraft…	正在将 {name} 发送到 ArtCraft…
+	Sent to ArtCraft: {name}	已发送到 ArtCraft：{name}
+	Send to ArtCraft failed: {error}	发送到 ArtCraft 失败：{error}
+	Send to ArtCraft cancelled	已取消发送到 ArtCraft

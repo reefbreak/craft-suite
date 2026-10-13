@@ -3569,3 +3569,10 @@
 
 # The native macOS application menu (Settings…).
 	Settings	Preferências
+	Send to ArtCraft	Enviar para o ArtCraft
+	Current Frame	Quadro atual
+	Active Sequence	Sequência ativa
+	Sending {name} to ArtCraft…	Enviando {name} para o ArtCraft…
+	Sent to ArtCraft: {name}	Enviado para o ArtCraft: {name}
+	Send to ArtCraft failed: {error}	Falha ao enviar para o ArtCraft: {error}
+	Send to ArtCraft cancelled	Envio para o ArtCraft cancelado

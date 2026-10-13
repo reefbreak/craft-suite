@@ -3592,3 +3592,10 @@
 	Export the labels to a preset file…	Exportar las etiquetas a un archivo de ajuste preestablecido…
 	Show the presets folder	Mostrar la carpeta de ajustes preestablecidos
 	Delete this preset	Eliminar este ajuste preestablecido
+	Send to ArtCraft	Enviar a ArtCraft
+	Current Frame	Fotograma actual
+	Active Sequence	Secuencia activa
+	Sending {name} to ArtCraft…	Enviando {name} a ArtCraft…
+	Sent to ArtCraft: {name}	Enviado a ArtCraft: {name}
+	Send to ArtCraft failed: {error}	Error al enviar a ArtCraft: {error}
+	Send to ArtCraft cancelled	Envío a ArtCraft cancelado

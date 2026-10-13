@@ -11,6 +11,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod aaf_omf;
+pub mod artcraft;
 pub mod autosave;
 pub mod captions;
 pub mod clip_ops;
@@ -431,6 +432,8 @@ pub struct Session {
     pub export_presets: export_tools::ExportPresetLibrary,
     /// The export queue (session state, not saved with the project).
     pub export_queue: export_tools::ExportQueue,
+    /// File ▸ Send to ArtCraft exports still running, and finished ones not yet shown.
+    pub artcraft: artcraft::Sends,
     /// Exports run a batch at a time by [`Session::pump_jobs`] (hosts without threads: web).
     pub stepped: Vec<SteppedJob>,
     /// Speech recogniser for `transcript.generate` (None = the Whisper model named by the command,
@@ -532,6 +535,7 @@ impl Session {
             presets: Default::default(),
             export_presets: Default::default(),
             export_queue: Default::default(),
+            artcraft: Default::default(),
             stepped: Vec::new(),
             transcriber: None,
             log: Default::default(),
@@ -546,6 +550,7 @@ impl Session {
     /// whether jobs remain. A job whose media is still loading waits for the next call.
     pub fn pump_jobs(&mut self, budget: std::time::Duration) -> bool {
         export_tools::pump_queue(self, false);
+        artcraft::poll(self);
         let t0 = web_time::Instant::now();
         while let Some(j) = self.stepped.first_mut() {
             match j.exporter.step(&j.provider, &j.progress) {
@@ -625,6 +630,7 @@ impl Session {
         masks::poll(self);
         scene_detect::poll(self);
         export_tools::pump_queue(self, false);
+        artcraft::poll(self);
         panels::log_jobs(self);
         let Some(p) = self.persistence.as_mut() else { return };
         for ev in p.drain_events() {
@@ -1211,6 +1217,8 @@ const MAX_SUBCLIP_CHAIN: usize = 16;
 mod aaf_omf_tests;
 #[cfg(test)]
 mod animated_image_tests;
+#[cfg(test)]
+mod artcraft_tests;
 #[cfg(test)]
 mod audio_effects_tests;
 #[cfg(test)]

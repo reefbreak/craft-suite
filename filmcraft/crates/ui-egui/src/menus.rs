@@ -236,6 +236,11 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             return crate::panels::frame_export::open(app, ctx, &params);
         }
     }
+    // File ▸ Send to ArtCraft ▸ Current Frame picks the monitor like Export Frame does.
+    if id == "file.sendFrameToArtcraft" && params.get("target").is_none() {
+        let source = targets_source(app, &params);
+        params.as_object_mut().ok_or("command parameters must be an object")?.insert("target".into(), json!(if source { "source" } else { "program" }));
+    }
     if id == "perf.stats" {
         // the engine's counters plus playback, frame workers and UI timings
         return Ok(crate::perf::stats(app));
@@ -567,6 +572,14 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
     if let Err(e) = &r {
         app.ui.status = e.clone();
     }
+    // A background send reports when it starts; the result arrives with `artcraft_status`.
+    if let Ok(v) = &r
+        && id == "file.sendSequenceToArtcraft"
+        && v["finished"] == json!(false)
+    {
+        let name = v["name"].as_str().unwrap_or_default();
+        app.ui.status = tlf!("Sending {name} to ArtCraft…", name);
+    }
     if r.is_ok() && matches!(id, "playhead.start" | "playhead.end") {
         crate::panels::timeline::reveal_playhead(app, ctx);
     }
@@ -637,6 +650,18 @@ fn encode_png(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u8>, Str
     let mut png = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
     Ok(png)
+}
+
+/// The status-bar message for a finished File ▸ Send to ArtCraft.
+pub fn artcraft_status(outcome: &filmcraft_engine::artcraft::SendOutcome) -> String {
+    match &outcome.result {
+        Ok(path) => {
+            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
+            tlf!("Sent to ArtCraft: {name}", name)
+        }
+        Err(e) if e == "cancelled" => tl!("Send to ArtCraft cancelled").to_string(),
+        Err(error) => tlf!("Send to ArtCraft failed: {error}", error),
+    }
 }
 
 /// A menu tree entry for display / `ui.menu.list`.
