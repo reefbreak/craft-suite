@@ -1,0 +1,48 @@
+Gesso
+Copyright (c) 2026 ArtCraft Team and the ArtCraft contributors.
+Modifications copyright (c) 2026 Jason Baldwin.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT, LICENSE-APACHE).
+
+Gesso is a modified version of ArtCraft (https://github.com/storytold/artcraft) by the ArtCraft
+Team. It is not made, endorsed, sponsored or supported by the ArtCraft Team.
+
+Changes from ArtCraft (see the git history for every change):
+  - The desktop app (artcraft-native, now gesso/) was renamed Gesso, with its own name, app id,
+    icon and mark (gesso/assets/brand/, original artwork, MIT OR Apache-2.0).
+  - Local mode was added: generation on the user's own Google Cloud Vertex AI and AWS Bedrock
+    accounts, model routing with TypeSafe Jev, spend metering and cost estimates, the studio tools
+    (image and video editing, background removal, frame extraction, 3D Stage, audio) and
+    hand-offs to the Craft apps (gesso/src/backend/local/, gesso/src/pages/tools/ and the files
+    that call them).
+  - ArtCraft's Tauri desktop app (crates/desktop/artcraft/), its web frontend (frontend/), their
+    build scripts and release workflows were removed. With them went every ArtCraft logo and icon,
+    and the third-party files ArtCraft's NOTICE lists as not licensed (sound effects, meme images,
+    skybox textures, MMD motion data and Mixamo renders).
+
+Trademarks
+
+The ArtCraft name, wordmark and logos are trademarks of the ArtCraft Team. They are not covered by
+the licence above and Gesso does not use them as its own; the name appears only to say what Gesso
+is based on, and where Gesso connects to an ArtCraft account (remote mode).
+
+The AI provider and service logos in gesso/assets/services/ are trademarks of their respective
+owners. They are used only to identify those services and are not covered by the licence above.
+
+Third-party material
+
+This product bundles third-party material under its own licences, listed below.
+
+tauri-plugin-http (crates/vendor/tauri-plugin-http/) — MIT or Apache-2.0. Copyright (c) 2017 -
+  Present Tauri Apps Contributors; Copyright 2019-2023 Tauri Programme within The Commons
+  Conservancy. Modified fork; see that directory's LICENSE_MIT and LICENSE_APACHE-2.0.
+Inter, Archivo and Geist Mono fonts (gesso/assets/fonts/) — SIL Open Font License 1.1; each
+  font's licence is next to it. https://rsms.me/inter/ · https://fonts.google.com/specimen/Archivo
+  · https://vercel.com/font
+
+Downloaded on first use (not bundled)
+
+ISNet general-use background-removal model (isnet-general-use.onnx), from the rembg project's
+  releases (https://github.com/danielgatis/rembg, MIT). The model is from DIS, "Highly Accurate
+  Dichotomous Image Segmentation" (Xuebin Qin et al., https://github.com/xuebinqin/DIS),
+  Apache-2.0.
