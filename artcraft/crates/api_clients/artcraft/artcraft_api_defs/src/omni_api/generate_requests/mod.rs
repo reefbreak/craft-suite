@@ -1,2 +1,0 @@
-pub mod omni_api_image_generate_request;
-pub mod omni_api_video_generate_request;

@@ -1,2 +1,0 @@
-pub mod generate_worldlabs_marble_0p1_mini_splat;
-pub mod generate_worldlabs_marble_0p1_plus_splat;

@@ -1,2 +1,0 @@
-pub mod uploaded_video_detected_model_family;
-pub mod uploaded_video_detected_model_type;

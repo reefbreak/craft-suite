@@ -1,5 +1,0 @@
-pub mod enqueue_hunyuan_3d_2_image_to_3d_webhook;
-pub mod enqueue_hunyuan_3d_21_image_to_3d_webhook;
-pub mod enqueue_hunyuan3d_v3_image_to_3d_webhook;
-pub mod enqueue_hunyuan3d_v3_sketch_to_3d_webhook;
-pub mod enqueue_hunyuan3d_v3_text_to_3d_webhook;

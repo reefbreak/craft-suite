@@ -1,1 +1,0 @@
-pub mod media_links_to_thumbnail_template;
