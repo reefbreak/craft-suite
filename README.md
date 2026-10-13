@@ -33,8 +33,9 @@ cd printcraft  && cargo build --release -p pdfcraft
 # …and likewise effectcraft, lightcraft, vectorcraft, designcraft, deckcraft, gridcraft, cadcraft
 ```
 
-Each app's own README lists its system requirements (FFmpeg for FilmCraft and EffectCraft,
-cmake for ArtCraft, and so on). ArtCraft's local-mode setup is in
+You need Rust (`rustup`) and the Xcode command-line tools. ArtCraft also needs cmake, and FFmpeg
+for its video previews and video tools (`brew install cmake ffmpeg`). Each app's own README has
+the details. ArtCraft's local-mode setup is in
 [`artcraft/artcraft-native/README.md`](artcraft/artcraft-native/README.md).
 
 ## Hand-offs
