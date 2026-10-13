@@ -986,8 +986,8 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The flattened PNG (with transparency) that Quick Export as PNG writes for `doc`, with the
-/// metadata and colour-space choices of Export Preferences. File › Export › Send to ArtCraft
-/// hands these bytes to ArtCraft's inbox. Pure: no file system, so it works on the web too.
+/// metadata and colour-space choices of Export Preferences. File › Export › Send to Gesso
+/// hands these bytes to Gesso's inbox. Pure: no file system, so it works on the web too.
 pub fn quick_export_png(doc: &Document, prefs: &crate::prefs::Export) -> Result<Vec<u8>> {
     let mut o = quick_export_options(prefs);
     o.insert("format".into(), json!("png24"));

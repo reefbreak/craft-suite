@@ -72,9 +72,9 @@
 	Revert	恢复
 	Export	导出
 	Quick Export as PNG	快速导出为 PNG
-	Send to ArtCraft	发送到 ArtCraft
-	Sent {name} to ArtCraft	已将 {name} 发送到 ArtCraft
-	Couldn't send to ArtCraft: {error}	无法发送到 ArtCraft：{error}
+	Send to Gesso	发送到 Gesso
+	Sent {name} to Gesso	已将 {name} 发送到 Gesso
+	Couldn't send to Gesso: {error}	无法发送到 Gesso：{error}
 	Export As…	导出为…
 	Export Preferences…	导出首选项…
 	Save for Web (Legacy)…	存储为 Web 所用格式（旧版）…
@@ -761,10 +761,11 @@
 	Tool Presets	工具预设
 	Tools	工具
 	About PhotoCraft	关于 PhotoCraft
-	PhotoCraft Website	PhotoCraft 网站
+	PhotoCraft Website (upstream)	PhotoCraft 网站（上游项目）
 	PhotoCraft on GitHub	PhotoCraft 的 GitHub 页面
-	ArtCraft Website	ArtCraft 网站
-	Join the ArtCraft Discord…	加入 ArtCraft 的 Discord 社区…
+	ArtCraft Website (upstream)	ArtCraft 网站（上游项目）
+	ArtCraft Discord (upstream)…	ArtCraft 的 Discord 社区（上游项目）…
+	ArtCraft Discord (upstream): {url}	ArtCraft 的 Discord 社区（上游项目）：{url}
 	Report an Issue…	报告问题…
 	WIA Support…	WIA 支持…
 	Apply	应用
@@ -1172,7 +1173,7 @@
 	Invert All	全部反相
 	Invert has no settings.	反相没有可调整的设置。
 	Italic	斜体
-	Join us on Discord	加入我们的 Discord 社区
+	ArtCraft Discord (upstream)	ArtCraft 的 Discord 社区（上游项目）
 	Justify all	全部两端对齐
 	Justify last centered	两端对齐，末行居中
 	Justify last left	两端对齐，末行左对齐
@@ -1313,6 +1314,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	由 PhotoCraft 管理颜色
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — 用 Rust 编写的开源原生图像编辑器。
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	由 ArtCraft 团队开发的 PhotoCraft 的修改版构建，来自 Gesso craft-suite。并非 PhotoCraft 或 ArtCraft 的官方版本。
+	Upstream:	上游项目：
 	Pin Depth:	控制点深度：
 	Pixel Length:	像素长度：
 	Pixels/Centimeter	像素/厘米

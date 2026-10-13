@@ -76,9 +76,9 @@
 	Revert	Zurücksetzen
 	Export	Exportieren
 	Quick Export as PNG	Schnellexport als PNG
-	Send to ArtCraft	An ArtCraft senden
-	Sent {name} to ArtCraft	{name} an ArtCraft gesendet
-	Couldn't send to ArtCraft: {error}	Senden an ArtCraft fehlgeschlagen: {error}
+	Send to Gesso	An Gesso senden
+	Sent {name} to Gesso	{name} an Gesso gesendet
+	Couldn't send to Gesso: {error}	Senden an Gesso fehlgeschlagen: {error}
 	Export As…	Exportieren als…
 	Export Preferences…	Exporteinstellungen…
 	Save for Web (Legacy)…	Für Web speichern (Legacy)…
@@ -752,10 +752,11 @@
 	Tool Presets	Werkzeugvorgaben
 	Tools	Werkzeuge
 	About PhotoCraft	Über PhotoCraft
-	PhotoCraft Website	PhotoCraft-Website
+	PhotoCraft Website (upstream)	PhotoCraft-Website (Originalprojekt)
 	PhotoCraft on GitHub	PhotoCraft auf GitHub
-	ArtCraft Website	ArtCraft-Website
-	Join the ArtCraft Discord…	ArtCraft-Discord beitreten…
+	ArtCraft Website (upstream)	ArtCraft-Website (Originalprojekt)
+	ArtCraft Discord (upstream)…	ArtCraft-Discord (Originalprojekt)…
+	ArtCraft Discord (upstream): {url}	ArtCraft-Discord (Originalprojekt): {url}
 	Report an Issue…	Problem melden…
 	WIA Support…	WIA-Unterstützung…
 	Apply	Anwenden
@@ -1162,7 +1163,7 @@
 	Invert All	Alle invertieren
 	Invert has no settings.	Invertieren hat keine Einstellungen.
 	Italic	Kursiv
-	Join us on Discord	Tritt unserem Discord bei
+	ArtCraft Discord (upstream)	ArtCraft-Discord (Originalprojekt)
 	Justify all	Alles im Blocksatz
 	Justify last centered	Letzte Zeile zentriert
 	Justify last left	Letzte Zeile links
@@ -1299,6 +1300,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	PhotoCraft verwaltet die Farben
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — ein nativer Open-Source-Bildeditor, geschrieben in Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Ein modifizierter Build von PhotoCraft vom ArtCraft-Team, aus der Gesso craft-suite. Keine offizielle PhotoCraft- oder ArtCraft-Version.
+	Upstream:	Originalprojekt:
 	Pin Depth:	Pin-Tiefe:
 	Pixel Length:	Pixel-Länge:
 	Pixels/Centimeter	Pixel/Zentimeter

@@ -74,9 +74,9 @@
 	Revert	復帰
 	Export	書き出し
 	Quick Export as PNG	PNG としてクイック書き出し
-	Send to ArtCraft	ArtCraft に送信
-	Sent {name} to ArtCraft	{name} を ArtCraft に送信しました
-	Couldn't send to ArtCraft: {error}	ArtCraft に送信できませんでした: {error}
+	Send to Gesso	Gesso に送信
+	Sent {name} to Gesso	{name} を Gesso に送信しました
+	Couldn't send to Gesso: {error}	Gesso に送信できませんでした: {error}
 	Export As…	書き出し形式を指定…
 	Export Preferences…	書き出しの環境設定…
 	Save for Web (Legacy)…	Web 用に保存 (従来方式)…
@@ -759,10 +759,11 @@
 	Tool Presets	ツールプリセット
 	Tools	ツール
 	About PhotoCraft	PhotoCraft について
-	PhotoCraft Website	PhotoCraft の Web サイト
+	PhotoCraft Website (upstream)	PhotoCraft の Web サイト（元のプロジェクト）
 	PhotoCraft on GitHub	GitHub 上の PhotoCraft
-	ArtCraft Website	ArtCraft の Web サイト
-	Join the ArtCraft Discord…	ArtCraft の Discord に参加…
+	ArtCraft Website (upstream)	ArtCraft の Web サイト（元のプロジェクト）
+	ArtCraft Discord (upstream)…	ArtCraft の Discord（元のプロジェクト）…
+	ArtCraft Discord (upstream): {url}	ArtCraft の Discord（元のプロジェクト）: {url}
 	Report an Issue…	問題を報告…
 	WIA Support…	WIA サポート…
 	Apply	適用
@@ -1169,7 +1170,7 @@
 	Invert All	すべて反転
 	Invert has no settings.	階調の反転には設定がありません。
 	Italic	イタリック
-	Join us on Discord	Discord に参加
+	ArtCraft Discord (upstream)	ArtCraft の Discord（元のプロジェクト）
 	Justify all	均等配置 (最終行も)
 	Justify last centered	最終行中央揃えの両端揃え
 	Justify last left	最終行左揃えの両端揃え
@@ -1306,6 +1307,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	PhotoCraft でカラーを管理
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — Rust で書かれた、オープンソースのネイティブ画像エディター。
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	ArtCraft チームの PhotoCraft を改変したビルドで、Gesso craft-suite に含まれます。PhotoCraft および ArtCraft の公式リリースではありません。
+	Upstream:	元のプロジェクト:
 	Pin Depth:	ピンの深さ:
 	Pixel Length:	ピクセル長:
 	Pixels/Centimeter	ピクセル/センチメートル

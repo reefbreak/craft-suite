@@ -3314,7 +3314,7 @@ fn build() -> Vec<CommandSpec> {
     crate::clip_ops::apply_layout(&mut v);
     // Search Bin, Find, Project Settings, Scene Edit Detection, Normalize Mix Track… (M3.11)
     crate::project_tools::apply_layout(&mut v);
-    // File ▸ Send to ArtCraft, after File ▸ Export
+    // File ▸ Send to Gesso, after File ▸ Export
     crate::artcraft::apply_layout(&mut v);
     v.shrink_to_fit();
     v

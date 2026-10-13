@@ -1,16 +1,17 @@
 //! Community and project links (Help menu, About dialog, header Discord button, Home screen).
 //!
-//! FilmCraft is part of the ArtCraft family: the community lives on the ArtCraft Discord, every
-//! app has a page on the ArtCraft website and a public GitHub repository.
+//! This is a modified build of FilmCraft (by the ArtCraft team) in the Gesso craft-suite, not an
+//! official release. These links point at the upstream FilmCraft project: its community Discord,
+//! its website page and its public GitHub repository, and are labelled as upstream.
 
 /// The app's short name, used in the website and repository URLs.
 pub const APP: &str = "filmcraft";
 
-/// The ArtCraft community Discord.
+/// The upstream FilmCraft community Discord.
 pub const DISCORD: &str = "https://discord.gg/artcraft";
-/// The ArtCraft website.
+/// The upstream project website.
 pub const WEBSITE: &str = "https://getartcraft.com";
-/// FilmCraft's page on the ArtCraft website.
+/// FilmCraft's page on the upstream website.
 pub const APP_PAGE: &str = "https://getartcraft.com/apps/filmcraft";
 /// FilmCraft's source repository.
 pub const GITHUB: &str = "https://github.com/storytold/filmcraft";
@@ -19,9 +20,9 @@ pub const ISSUES: &str = "https://github.com/storytold/filmcraft/issues";
 
 /// (command id, label, url) for every link, in menu order.
 pub const ALL: [(&str, &str, &str); 5] = [
-    ("help.discord", "Join the ArtCraft Discord…", DISCORD),
-    ("help.website", "ArtCraft Website", WEBSITE),
-    ("help.appPage", "FilmCraft on getartcraft.com", APP_PAGE),
+    ("help.discord", "FilmCraft Upstream Discord…", DISCORD),
+    ("help.website", "Upstream Website (getartcraft.com)", WEBSITE),
+    ("help.appPage", "FilmCraft Upstream on getartcraft.com", APP_PAGE),
     ("help.github", "FilmCraft on GitHub", GITHUB),
     ("help.reportIssue", "Report an Issue…", ISSUES),
 ];

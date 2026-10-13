@@ -419,6 +419,7 @@ fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
         "models" => crate::credits::models_ui(ui),
         _ => {
             ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
+            ui.label(tl!("A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release."));
             ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
             ui.add_space(12.0);
             ui.vertical_centered(|ui| {

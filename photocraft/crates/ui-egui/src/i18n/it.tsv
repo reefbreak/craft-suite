@@ -73,9 +73,9 @@
 	Revert	Ripristina
 	Export	Esporta
 	Quick Export as PNG	Esportazione rapida come PNG
-	Send to ArtCraft	Invia ad ArtCraft
-	Sent {name} to ArtCraft	{name} inviato ad ArtCraft
-	Couldn't send to ArtCraft: {error}	Impossibile inviare ad ArtCraft: {error}
+	Send to Gesso	Invia a Gesso
+	Sent {name} to Gesso	{name} inviato a Gesso
+	Couldn't send to Gesso: {error}	Impossibile inviare a Gesso: {error}
 	Export As…	Esporta come…
 	Export Preferences…	Preferenze di esportazione…
 	Save for Web (Legacy)…	Salva per Web (legacy)…
@@ -757,10 +757,10 @@
 	Tool Presets	Predefiniti strumento
 	Tools	Strumenti
 	About PhotoCraft	Informazioni su PhotoCraft
-	PhotoCraft Website	Sito web PhotoCraft
+	PhotoCraft Website (upstream)	Sito web PhotoCraft (progetto originale)
 	PhotoCraft on GitHub	PhotoCraft su GitHub
-	ArtCraft Website	Sito web ArtCraft
-	Join the ArtCraft Discord…	Unisciti al Discord di ArtCraft…
+	ArtCraft Website (upstream)	Sito web ArtCraft (progetto originale)
+	ArtCraft Discord (upstream)…	Discord di ArtCraft (progetto originale)…
 	Report an Issue…	Segnala un problema…
 	WIA Support…	Supporto WIA…
 	Apply	Applica
@@ -1167,7 +1167,7 @@
 	Invert All	Inverti tutto
 	Invert has no settings.	Inverti non ha impostazioni.
 	Italic	Corsivo
-	Join us on Discord	Unisciti al nostro Discord
+	ArtCraft Discord (upstream)	Discord di ArtCraft (progetto originale)
 	Justify all	Giustifica tutto
 	Justify last centered	Giustifica ultimo centrato
 	Justify last left	Giustifica ultimo a sinistra
@@ -1304,6 +1304,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	PhotoCraft gestisce i colori
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — editor immagini nativo open-source scritto in Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Una build modificata di PhotoCraft del team ArtCraft, dalla Gesso craft-suite. Non è una versione ufficiale di PhotoCraft o ArtCraft.
+	Upstream:	Progetto originale:
 	Pin Depth:	Profondità pin:
 	Pixel Length:	Lunghezza pixel:
 	Pixels/Centimeter	Pixel/Centimetro
@@ -4012,7 +4014,7 @@ navigator	Zoom	Zoom
 	on	attivo
 	off	disattivo
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Questa regolazione ({key}) resta come è stata importata e non si può ancora modificare.
-	Join the ArtCraft Discord ({url})	Unisciti al Discord di ArtCraft ({url})
+	ArtCraft Discord (upstream): {url}	Discord di ArtCraft (progetto originale): {url}
 	{index} of {total}	{index} di {total}
 	{shortcut} assigned.	{shortcut} assegnata.
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} è già usata da {commands} e verrà rimossa quando fai clic su OK.

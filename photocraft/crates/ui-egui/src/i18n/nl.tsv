@@ -66,9 +66,9 @@
 	Revert	Terugzetten
 	Export	Exporteren
 	Quick Export as PNG	Snel exporteren als PNG
-	Send to ArtCraft	Naar ArtCraft sturen
-	Sent {name} to ArtCraft	{name} naar ArtCraft gestuurd
-	Couldn't send to ArtCraft: {error}	Kan niet naar ArtCraft sturen: {error}
+	Send to Gesso	Naar Gesso sturen
+	Sent {name} to Gesso	{name} naar Gesso gestuurd
+	Couldn't send to Gesso: {error}	Kan niet naar Gesso sturen: {error}
 	Export As…	Exporteren als…
 	Export Preferences…	Exportvoorkeuren…
 	Save for Web (Legacy)…	Opslaan voor web (verouderd)…
@@ -742,10 +742,11 @@
 	Tool Presets	Gereedschapsvoorinstellingen
 	Tools	Gereedschappen
 	About PhotoCraft	Over PhotoCraft
-	PhotoCraft Website	Website van PhotoCraft
+	PhotoCraft Website (upstream)	Website van PhotoCraft (oorspronkelijk project)
 	PhotoCraft on GitHub	PhotoCraft op GitHub
-	ArtCraft Website	Website van ArtCraft
-	Join the ArtCraft Discord…	Deelnemen aan de ArtCraft-Discord…
+	ArtCraft Website (upstream)	Website van ArtCraft (oorspronkelijk project)
+	ArtCraft Discord (upstream)…	ArtCraft-Discord (oorspronkelijk project)…
+	ArtCraft Discord (upstream): {url}	ArtCraft-Discord (oorspronkelijk project): {url}
 	Report an Issue…	Probleem melden…
 	WIA Support…	WIA-ondersteuning…
 	Apply	Toepassen
@@ -1151,7 +1152,7 @@
 	Invert All	Alles omkeren
 	Invert has no settings.	Omkeren heeft geen instellingen.
 	Italic	Cursief
-	Join us on Discord	Doe mee op Discord
+	ArtCraft Discord (upstream)	ArtCraft-Discord (oorspronkelijk project)
 	Justify all	Alles uitvullen
 	Justify last centered	Uitvullen, laatste regel gecentreerd
 	Justify last left	Uitvullen, laatste regel links
@@ -1288,6 +1289,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	PhotoCraft beheert kleuren
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — een opensource, native afbeeldingseditor geschreven in Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Een aangepaste build van PhotoCraft van het ArtCraft-team, uit de Gesso craft-suite. Geen officiële release van PhotoCraft of ArtCraft.
+	Upstream:	Oorspronkelijk project:
 	Pin Depth:	Speldiepte:
 	Pixel Length:	Pixellengte:
 	Pixels/Centimeter	Pixels/centimeter

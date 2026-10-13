@@ -4,7 +4,7 @@
 # Brazilian Portuguese video-editing vocabulary. No proprietary localisation resource, string table
 # or product UI was consulted or copied; add entries the same way. Commands use the infinitive
 # ("Salvar como…"), instructions use the polite imperative ("Selecione um clipe…"), and labels use
-# sentence case. Product, format and technology names (FilmCraft, ArtCraft, Lumetri, ProRes, LUFS,
+# sentence case. Product, format and technology names (FilmCraft, ArtCraft, Gesso, Lumetri, ProRes, LUFS,
 # EDL, AAF…) keep their spelling; decimals in prose use a comma ("29,97 fps"). This catalog has the
 # same entries as `es.tsv` plus the native macOS Settings menu; strings added later show in English
 # until they are translated. A native-speaker review is welcome.
@@ -44,7 +44,7 @@
 	Apply Default Transitions to Selection	Aplicar transições padrão à seleção
 	Apply Video Transition	Aplicar transição de vídeo
 	Arrange	Organizar
-	ArtCraft Website	Site do ArtCraft
+	Upstream Website (getartcraft.com)	Site do projeto original (getartcraft.com)
 	Assembly	Montagem
 	Attach Proxies…	Anexar proxies…
 	Audio Channels…	Canais de áudio…
@@ -139,7 +139,7 @@
 	Fill frame	Preencher quadro
 	FilmCraft Help…	Ajuda do FilmCraft…
 	FilmCraft on GitHub	FilmCraft no GitHub
-	FilmCraft on getartcraft.com	FilmCraft no getartcraft.com
+	FilmCraft Upstream on getartcraft.com	FilmCraft original no getartcraft.com
 	Find Next	Localizar próximo
 	Find…	Localizar…
 	Fit	Ajustar
@@ -183,7 +183,7 @@
 	Insert Frame Hold Segment	Inserir segmento de quadro congelado
 	Install Motion Graphics Template…	Instalar modelo de gráficos de movimento…
 	Interpret Footage…	Interpretar clipes…
-	Join the ArtCraft Discord…	Entre no Discord do ArtCraft…
+	FilmCraft Upstream Discord…	Discord do projeto original do FilmCraft…
 	Keyboard Shortcuts…	Atalhos de teclado…
 	Label	Rótulo
 	Labels…	Rótulos…
@@ -374,7 +374,7 @@
 	Master volume: use the Audio Track Mixer	Volume principal: use o misturador de faixas de áudio
 	Search	Pesquisar
 	Quick Export	Exportação rápida
-	Join the ArtCraft Discord (discord.gg/artcraft)	Entre no Discord do ArtCraft (discord.gg/artcraft)
+	FilmCraft upstream Discord (discord.gg/artcraft)	Discord do projeto original do FilmCraft (discord.gg/artcraft)
 	Cancel	Cancelar
 	OK	OK
 	Interpret Footage	Interpretar clipes
@@ -417,8 +417,9 @@
 	Delete Caption Track	Excluir faixa de legendas
 	Delete Empty Caption Tracks	Excluir faixas de legendas vazias
 	Version {version}	Versão {version}
-	A clean-room, pure-Rust non-linear video editor. Part of the ArtCraft family.	Um editor de vídeo não linear em Rust puro, desenvolvido em sala limpa. Parte da família ArtCraft.
-	Join the ArtCraft Discord	Entre no Discord do ArtCraft
+	A clean-room, pure-Rust non-linear video editor.	Um editor de vídeo não linear em Rust puro, desenvolvido em sala limpa.
+	A modified build of FilmCraft by the ArtCraft team, from the Gesso craft-suite. Not an official FilmCraft or ArtCraft release.	Uma versão modificada do FilmCraft, da equipe do ArtCraft, incluída na suíte Gesso. Não é uma versão oficial do FilmCraft nem do ArtCraft.
+	FilmCraft upstream Discord	Discord do projeto original do FilmCraft
 	Source code on GitHub	Código-fonte no GitHub
 	Report an issue	Relatar um problema
 	MIT OR Apache-2.0. Fonts: Inter, Noto Serif and JetBrains Mono (SIL OFL 1.1).	MIT OR Apache-2.0. Fontes: Inter, Noto Serif e JetBrains Mono (SIL OFL 1.1).
@@ -459,7 +460,6 @@
 	Bars and Tone	Barras e tom
 	SMPTE HD bars with 1 kHz reference tone	Barras SMPTE HD com tom de referência de 1 kHz
 	Community	Comunidade
-	Join us on Discord	Junte-se a nós no Discord
 	OMF Export Settings	Configurações de exportação OMF
 	AAF Export Settings	Configurações de exportação AAF
 	OMF Title:	Título OMF:
@@ -3569,10 +3569,10 @@
 
 # The native macOS application menu (Settings…).
 	Settings	Preferências
-	Send to ArtCraft	Enviar para o ArtCraft
+	Send to Gesso	Enviar para o Gesso
 	Current Frame	Quadro atual
 	Active Sequence	Sequência ativa
-	Sending {name} to ArtCraft…	Enviando {name} para o ArtCraft…
-	Sent to ArtCraft: {name}	Enviado para o ArtCraft: {name}
-	Send to ArtCraft failed: {error}	Falha ao enviar para o ArtCraft: {error}
-	Send to ArtCraft cancelled	Envio para o ArtCraft cancelado
+	Sending {name} to Gesso…	Enviando {name} para o Gesso…
+	Sent to Gesso: {name}	Enviado para o Gesso: {name}
+	Send to Gesso failed: {error}	Falha ao enviar para o Gesso: {error}
+	Send to Gesso cancelled	Envio para o Gesso cancelado

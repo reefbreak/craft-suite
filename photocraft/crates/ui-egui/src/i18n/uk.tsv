@@ -78,9 +78,9 @@
 	Export…	Експортувати…
 	Quick Export As PNG	Швидкий експорт у PNG
 	Quick Export as PNG	Швидкий експорт у PNG
-	Send to ArtCraft	Надіслати в ArtCraft
-	Sent {name} to ArtCraft	{name} надіслано в ArtCraft
-	Couldn't send to ArtCraft: {error}	Не вдалося надіслати в ArtCraft: {error}
+	Send to Gesso	Надіслати в Gesso
+	Sent {name} to Gesso	{name} надіслано в Gesso
+	Couldn't send to Gesso: {error}	Не вдалося надіслати в Gesso: {error}
 	Place Embedded…	Розмістити вбудований…
 	Place Linked…	Розмістити пов'язаний…
 	Package…	Зібрати пакет…
@@ -487,11 +487,12 @@
 
 # Help
 	About PhotoCraft	Про PhotoCraft
-	PhotoCraft Website	Вебсайт PhotoCraft
+	PhotoCraft Website (upstream)	Вебсайт PhotoCraft (вихідний проєкт)
 	PhotoCraft on GitHub	PhotoCraft на GitHub
 	Report an Issue…	Повідомити про проблему…
-	ArtCraft Website	Вебсайт ArtCraft
-	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
+	ArtCraft Website (upstream)	Вебсайт ArtCraft (вихідний проєкт)
+	ArtCraft Discord (upstream)…	Discord ArtCraft (вихідний проєкт)…
+	ArtCraft Discord (upstream): {url}	Discord ArtCraft (вихідний проєкт): {url}
 	System Info…	Інформація про систему…
 
 # Tools and options bar
@@ -1616,7 +1617,7 @@
 	Preserve Transparency	Зберігати прозорість
 	Reverse	Зворотний
 	Align with layer	Вирівняти за шаром
-	Join us on Discord	Приєднуйтеся до нас у Discord
+	ArtCraft Discord (upstream)	Discord ArtCraft (вихідний проєкт)
 	PhotoCraft website	Вебсайт PhotoCraft
 	ArtCraft	ArtCraft
 	GitHub	GitHub
@@ -2119,6 +2120,8 @@
 	Pattern Size	Розмір візерунка
 	PhotoCraft	PhotoCraft
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — нативний редактор зображень із відкритим кодом, написаний на Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Змінена збірка PhotoCraft від команди ArtCraft із Gesso craft-suite. Це не офіційний випуск PhotoCraft чи ArtCraft.
+	Upstream:	Вихідний проєкт:
 	Position and Size	Положення та розмір
 	Preserve Details	Зберігати деталі
 	Preserve Luminosity	Зберігати світність

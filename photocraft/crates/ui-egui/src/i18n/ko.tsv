@@ -63,9 +63,9 @@
 	Revert	되돌리기
 	Export	내보내기
 	Quick Export as PNG	PNG로 빠르게 내보내기
-	Send to ArtCraft	ArtCraft로 보내기
-	Sent {name} to ArtCraft	{name}을(를) ArtCraft로 보냈습니다
-	Couldn't send to ArtCraft: {error}	ArtCraft로 보낼 수 없습니다: {error}
+	Send to Gesso	Gesso로 보내기
+	Sent {name} to Gesso	{name}을(를) Gesso로 보냈습니다
+	Couldn't send to Gesso: {error}	Gesso로 보낼 수 없습니다: {error}
 	Export As…	다른 형식으로 내보내기…
 	Export Preferences…	내보내기 환경 설정…
 	Save for Web (Legacy)…	웹용으로 저장(기존 방식)…
@@ -733,10 +733,11 @@
 	Tool Presets	도구 사전 설정
 	Tools	도구
 	About PhotoCraft	PhotoCraft 정보
-	PhotoCraft Website	PhotoCraft 웹사이트
+	PhotoCraft Website (upstream)	PhotoCraft 웹사이트 (원본 프로젝트)
 	PhotoCraft on GitHub	GitHub의 PhotoCraft
-	ArtCraft Website	ArtCraft 웹사이트
-	Join the ArtCraft Discord…	ArtCraft Discord 참여…
+	ArtCraft Website (upstream)	ArtCraft 웹사이트 (원본 프로젝트)
+	ArtCraft Discord (upstream)…	ArtCraft Discord (원본 프로젝트)…
+	ArtCraft Discord (upstream): {url}	ArtCraft Discord (원본 프로젝트): {url}
 	Report an Issue…	문제 신고…
 	WIA Support…	WIA 지원…
 	Apply	적용
@@ -1138,7 +1139,7 @@
 	Invert All	모두 반전
 	Invert has no settings.	반전에는 설정이 없습니다.
 	Italic	기울임꼴
-	Join us on Discord	Discord 참여
+	ArtCraft Discord (upstream)	ArtCraft Discord (원본 프로젝트)
 	Justify all	모든 줄 양쪽 정렬
 	Justify last centered	마지막 줄 가운데 정렬
 	Justify last left	마지막 줄 왼쪽 정렬
@@ -1275,6 +1276,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	PhotoCraft에서 색상 관리
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — Rust로 작성된 오픈 소스 네이티브 이미지 편집기.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	ArtCraft 팀의 PhotoCraft를 수정한 빌드로, Gesso craft-suite에 포함되어 있습니다. PhotoCraft 또는 ArtCraft의 공식 릴리스가 아닙니다.
+	Upstream:	원본 프로젝트:
 	Pin Depth:	핀 깊이:
 	Pixel Length:	픽셀 길이:
 	Pixels/Centimeter	픽셀/센티미터

@@ -447,11 +447,11 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     }
 }
 
-/// File › Export › Send to ArtCraft: writes into `inbox` (ArtCraft's `<home>/Artcraft/inbox`; a
+/// File › Export › Send to Gesso: writes into `inbox` (Gesso's `<home>/Artcraft/inbox`; a
 /// temporary folder in tests). `None` (no home folder) makes every send fail with a reason.
 fn send_to_artcraft(inbox: Option<PathBuf>) -> photocraft_ui_egui::SendToArtcraftFn {
     Box::new(move |doc_name: &str, png: &[u8]| {
-        let dir = inbox.as_deref().ok_or("no home folder to find ArtCraft's inbox in")?;
+        let dir = inbox.as_deref().ok_or("no home folder to find Gesso's inbox in")?;
         let path = crate::artcraft_inbox::send(dir, doc_name, png).map_err(|e| e.to_string())?;
         Ok(path.to_string_lossy().into_owned())
     })
@@ -679,8 +679,8 @@ mod tests {
         assert_eq!(save_filters("Untitled")[0].0, "PSD Document", "no extension keeps the default");
     }
 
-    /// File › Export › Send to ArtCraft end to end, with the inbox in a temporary folder: a
-    /// flattened, transparent PNG appears under ArtCraft's naming, never over an older file.
+    /// File › Export › Send to Gesso end to end, with the inbox in a temporary folder: a
+    /// flattened, transparent PNG appears under Gesso's naming, never over an older file.
     #[test]
     fn send_to_artcraft_writes_a_transparent_png_into_the_inbox() {
         let root = std::env::temp_dir().join(format!("photocraft-send-artcraft-{}", std::process::id()));
@@ -713,7 +713,7 @@ mod tests {
         // Without a home folder the send fails with a notice and writes nothing.
         app.services.send_to_artcraft = Some(send_to_artcraft(None));
         let e = photocraft_ui_egui::menus::invoke(&mut app, &ctx, "file.export.sendToArtcraft", json!({})).unwrap_err();
-        assert!(e.contains("ArtCraft") && e.contains("home folder"), "{e}");
+        assert!(e.contains("Gesso") && e.contains("home folder"), "{e}");
         assert!(app.ui.status_error);
         assert!(app.ui.notices.last().is_some_and(|n| n.error && n.title == e));
         let _ = std::fs::remove_dir_all(&root);

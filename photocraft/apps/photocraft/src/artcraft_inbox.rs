@@ -1,10 +1,10 @@
-//! File › Export › Send to ArtCraft: delivers a finished PNG into ArtCraft's inbox folder,
+//! File › Export › Send to Gesso: delivers a finished PNG into Gesso's inbox folder,
 //! `<home>/Artcraft/inbox`.
 //!
-//! ArtCraft polls that folder and imports every complete file in it, so a file must never be seen
-//! half-written: the bytes go to a hidden `.part` file in the same folder (ArtCraft skips hidden
+//! Gesso polls that folder and imports every complete file in it, so a file must never be seen
+//! half-written: the bytes go to a hidden `.part` file in the same folder (Gesso skips hidden
 //! names and `.part`/`.tmp` files), are flushed, and only then appear under their final name in
-//! one step. Files are named `PhotoCraft - <document>.png` so ArtCraft can say where they came
+//! one step. Files are named `PhotoCraft - <document>.png` so Gesso can say where they came
 //! from, and an existing file is never replaced: the name gains ` 2`, ` 3`, … instead.
 
 use std::ffi::OsString;
@@ -13,14 +13,14 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Every file name starts with this, so ArtCraft can tell where the file came from.
+/// Every file name starts with this, so Gesso can tell where the file came from.
 pub const NAME_PREFIX: &str = "PhotoCraft - ";
 /// How many numbered names (` 2` … ` 9999`) are tried before giving up.
 const MAX_SUFFIX: u32 = 9999;
 /// Longest document-name part kept, in characters (file systems allow 255 bytes per name).
 const MAX_NAME_CHARS: usize = 120;
 
-/// ArtCraft's inbox under the user's home folder (`HOME`, or `USERPROFILE` on Windows), read
+/// Gesso's inbox under the user's home folder (`HOME`, or `USERPROFILE` on Windows), read
 /// from `env` so tests can fake it. `None` without a home folder.
 pub fn inbox_dir(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     let home = env("HOME").filter(|h| !h.is_empty()).or_else(|| if cfg!(windows) { env("USERPROFILE").filter(|h| !h.is_empty()) } else { None })?;

@@ -1,7 +1,8 @@
-//! File ▸ Send to ArtCraft: hand the current frame or the active sequence to ArtCraft through its
-//! inbox folder (`~/Artcraft/inbox`, or the `dir` parameter).
+//! File ▸ Send to Gesso: hand the current frame or the active sequence to Gesso (an app based on
+//! ArtCraft, in the Gesso craft-suite) through its inbox folder (`~/Artcraft/inbox`, or the `dir`
+//! parameter). The folder keeps its old name so existing Gesso installs keep reading it.
 //!
-//! ArtCraft imports every complete file in the inbox and moves it away. It ignores hidden files
+//! Gesso imports every complete file in the inbox and moves it away. It ignores hidden files
 //! (names starting with `.`) and names ending in `.part` / `.tmp`, and only takes files whose
 //! modification time is at least 2 s old. So a send never lets a half-written file show up:
 //!
@@ -23,7 +24,7 @@
 //!   file when the job succeeds and deletes it when the job fails or is cancelled. `wait: true`
 //!   exports and renames before returning.
 //!
-//! The web build has no inbox folder to share with ArtCraft: both commands are disabled there.
+//! The web build has no inbox folder to share with Gesso: both commands are disabled there.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,7 +36,7 @@ use crate::{EngineError, Result, Session};
 
 /// The inbox under the home directory.
 pub const INBOX: &str = "Artcraft/inbox";
-/// Final file names start with this, so ArtCraft can say where a file came from.
+/// Final file names start with this, so Gesso can say where a file came from.
 pub const PREFIX: &str = "FilmCraft - ";
 /// Finished sends kept for the frontend to show ([`Sends::take_finished`]); older ones are dropped.
 const MAX_FINISHED: usize = 32;
@@ -75,9 +76,9 @@ impl SendOutcome {
     /// The status-bar message for this outcome.
     pub fn message(&self) -> String {
         match &self.result {
-            Ok(path) => format!("Sent to ArtCraft: {}", file_name(Path::new(path))),
-            Err(e) if e == "cancelled" => "Send to ArtCraft cancelled".into(),
-            Err(e) => format!("Send to ArtCraft failed: {e}"),
+            Ok(path) => format!("Sent to Gesso: {}", file_name(Path::new(path))),
+            Err(e) if e == "cancelled" => "Send to Gesso cancelled".into(),
+            Err(e) => format!("Send to Gesso failed: {e}"),
         }
     }
 }
@@ -101,7 +102,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
         CommandSpec {
             id: "file.sendFrameToArtcraft",
             label: "Current Frame",
-            menu: &["File", "Send to ArtCraft"],
+            menu: &["File", "Send to Gesso"],
             shortcut: None,
             params: r#"{"dir":str?,"target":"source|program"?,"item":id?,"sequence":id?,"time":ticks?}"#,
             enabled: can_send,
@@ -111,7 +112,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
         CommandSpec {
             id: "file.sendSequenceToArtcraft",
             label: "Active Sequence",
-            menu: &["File", "Send to ArtCraft"],
+            menu: &["File", "Send to Gesso"],
             shortcut: None,
             params: r#"{"dir":str?,"sequence":id?,"wait":bool=false}"#,
             enabled: can_send_sequence,
@@ -122,7 +123,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
 }
 
 /// Put the commands right after File ▸ Export's first item: a submenu sits where its first item
-/// is, so File ▸ Send to ArtCraft comes right after File ▸ Export.
+/// is, so File ▸ Send to Gesso comes right after File ▸ Export.
 pub(crate) fn apply_layout(v: &mut Vec<CommandSpec>) {
     let at = v.iter().position(|c| c.menu == ["File", "Export"]).map_or(v.len(), |i| i + 1);
     v.splice(at..at, commands());
@@ -181,7 +182,7 @@ fn send_frame(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let outcome = finalize(&partial, &dir, &name, "png").map(|f| f.to_string_lossy().into_owned());
     report(s, None, outcome.clone());
-    let path = outcome.map_err(|e| EngineError::Other(format!("Send to ArtCraft failed: {e}")))?;
+    let path = outcome.map_err(|e| EngineError::Other(format!("Send to Gesso failed: {e}")))?;
     Ok(json!({"path": path, "width": exported["width"], "height": exported["height"], "target": exported["target"], "time": exported["time"]}))
 }
 
@@ -221,17 +222,17 @@ fn send_sequence(s: &mut Session, p: &Value) -> Result<Value> {
         let outcome = s.artcraft.finished.iter().rev().find(|o| o.job == Some(job)).map(|o| o.result.clone());
         let path = match outcome {
             Some(Ok(path)) => path,
-            Some(Err(e)) => return Err(EngineError::Other(format!("Send to ArtCraft failed: {e}"))),
-            None => return Err(EngineError::Other("Send to ArtCraft: the export has not finished".into())),
+            Some(Err(e)) => return Err(EngineError::Other(format!("Send to Gesso failed: {e}"))),
+            None => return Err(EngineError::Other("Send to Gesso: the export has not finished".into())),
         };
         return Ok(json!({"job": job, "path": path, "finished": true}));
     }
-    s.toast(format!("Sending {name} to ArtCraft…"));
+    s.toast(format!("Sending {name} to Gesso…"));
     Ok(json!({"job": job, "name": name, "partial": partial.to_string_lossy(), "dir": dir.to_string_lossy(), "finished": false}))
 }
 
 fn can_send(_: &Session) -> std::result::Result<(), String> {
-    if cfg!(target_arch = "wasm32") { Err("Send to ArtCraft needs the desktop app (ArtCraft reads a folder on this computer)".into()) } else { Ok(()) }
+    if cfg!(target_arch = "wasm32") { Err("Send to Gesso needs the desktop app (Gesso reads a folder on this computer)".into()) } else { Ok(()) }
 }
 
 fn can_send_sequence(s: &Session) -> std::result::Result<(), String> {
@@ -255,14 +256,14 @@ fn inbox(s: &Session, p: &Value, cmd: &str) -> Result<PathBuf> {
             PathBuf::from(crate::export_tools::expand_home(d))
         }
     };
-    std::fs::create_dir_all(&dir).map_err(|e| EngineError::Other(format!("cannot create the ArtCraft inbox {}: {e}", dir.display())))?;
+    std::fs::create_dir_all(&dir).map_err(|e| EngineError::Other(format!("cannot create the Gesso inbox {}: {e}", dir.display())))?;
     if !dir.is_dir() {
-        return Err(EngineError::Other(format!("the ArtCraft inbox {} is not a folder", dir.display())));
+        return Err(EngineError::Other(format!("the Gesso inbox {} is not a folder", dir.display())));
     }
     Ok(dir)
 }
 
-/// A hidden name in `dir` that nothing else uses: ArtCraft skips it while it is written.
+/// A hidden name in `dir` that nothing else uses: Gesso skips it while it is written.
 fn partial_path(dir: &Path, name: &str, ext: &str) -> PathBuf {
     loop {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -328,7 +329,7 @@ fn discard(partial: &Path) {
 }
 
 /// A name safe on every desktop file system: no separators, reserved or control characters, no
-/// leading dot (that would hide the file from ArtCraft), at most [`MAX_NAME_CHARS`] characters.
+/// leading dot (that would hide the file from Gesso), at most [`MAX_NAME_CHARS`] characters.
 fn file_safe(n: &str) -> String {
     let s: String = n.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c }).take(MAX_NAME_CHARS).collect();
     let s = s.trim().trim_start_matches('.').trim_end_matches(['.', ' ']).trim();

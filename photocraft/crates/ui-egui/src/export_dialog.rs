@@ -440,28 +440,28 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
     confirm(app, &f)
 }
 
-/// File › Export › Send to ArtCraft: the active document flattened to PNG with transparency (the
+/// File › Export › Send to Gesso: the active document flattened to PNG with transparency (the
 /// bytes Quick Export as PNG writes, honouring Export Preferences' metadata and sRGB choices),
-/// handed to the platform's ArtCraft inbox service, which names it `PhotoCraft - <document>.png`.
+/// handed to the platform's Gesso inbox service, which names it `PhotoCraft - <document>.png`.
 /// Success and failure are reported like the other exports: status bar, plus a notice on failure.
 pub fn send_to_artcraft(app: &mut PhotocraftApp) -> Result<Value, String> {
     let st = app.session.active().ok_or("no document")?;
     let doc = st.doc.clone();
     let prefs = app.session.prefs().export.clone();
     let sent = photocraft_engine::web_cmds::quick_export_png(&doc, &prefs).map_err(|e| e.to_string()).and_then(|bytes| {
-        let send = app.services.send_to_artcraft.as_mut().ok_or("ArtCraft's inbox is not available in this build")?;
+        let send = app.services.send_to_artcraft.as_mut().ok_or("Gesso's inbox is not available in this build")?;
         let path = send(&doc.name, &bytes)?;
         Ok((path, bytes.len()))
     });
     match sent {
         Ok((path, bytes)) => {
-            let template = "Sent {name} to ArtCraft";
+            let template = "Sent {name} to Gesso";
             app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &crate::file_open::display_name(&path))]);
             app.ui.status_error = false;
             Ok(json!({"path": path, "bytes": bytes}))
         }
         Err(error) => {
-            let template = "Couldn't send to ArtCraft: {error}";
+            let template = "Couldn't send to Gesso: {error}";
             let message = crate::i18n::fmt(tl!(template), &[("error", &error)]);
             crate::notices::error(app, message.clone());
             Err(message)

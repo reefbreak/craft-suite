@@ -30,7 +30,7 @@
 	Apply Default Transitions to Selection	Застосувати типові переходи до виділення
 	Apply Video Transition	Застосувати відеоперехід
 	Arrange	Упорядкувати
-	ArtCraft Website	Вебсайт ArtCraft
+	Upstream Website (getartcraft.com)	Вебсайт вихідного проєкту (getartcraft.com)
 	Assembly	Компонування
 	Attach Proxies…	Приєднати проксі…
 	Audio	Аудіо
@@ -128,7 +128,7 @@
 	Fill frame	Заповнити кадр
 	FilmCraft Help…	Довідка FilmCraft…
 	FilmCraft on GitHub	FilmCraft на GitHub
-	FilmCraft on getartcraft.com	FilmCraft на getartcraft.com
+	FilmCraft Upstream on getartcraft.com	Вихідний FilmCraft на getartcraft.com
 	Find Next	Знайти далі
 	Find…	Знайти…
 	Fit	Умістити
@@ -172,7 +172,7 @@
 	Insert Frame Hold Segment	Вставити сегмент стоп-кадру
 	Install Motion Graphics Template…	Установити шаблон анімаційної графіки…
 	Interpret Footage…	Інтерпретувати матеріал…
-	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
+	FilmCraft Upstream Discord…	Discord вихідного проєкту FilmCraft…
 	Keyboard Shortcuts…	Клавіатурні скорочення…
 	Label	Мітка
 	Labels…	Мітки…
@@ -357,6 +357,6 @@
 	Zoom to Sequence	Умістити секвенцію
 	Project Notes	Нотатки проєкту
 
-	Send to ArtCraft	Надіслати в ArtCraft
+	Send to Gesso	Надіслати в Gesso
 	Current Frame	Поточний кадр
 	Active Sequence	Активна секвенція

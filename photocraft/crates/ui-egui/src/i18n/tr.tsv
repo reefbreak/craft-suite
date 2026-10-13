@@ -63,9 +63,9 @@
 	Revert	Geri Döndür
 	Export	Dışa Aktar
 	Quick Export as PNG	PNG Olarak Hızlı Dışa Aktarma
-	Send to ArtCraft	ArtCraft'a Gönder
-	Sent {name} to ArtCraft	{name}, ArtCraft'a gönderildi
-	Couldn't send to ArtCraft: {error}	ArtCraft'a gönderilemedi: {error}
+	Send to Gesso	Gesso'ya Gönder
+	Sent {name} to Gesso	{name}, Gesso'ya gönderildi
+	Couldn't send to Gesso: {error}	Gesso'ya gönderilemedi: {error}
 	Export As…	Farklı Dışa Aktar…
 	Export Preferences…	Dışa Aktarma Tercihleri…
 	Save for Web (Legacy)…	Web İçin Kaydet (Eski)…
@@ -737,10 +737,11 @@
 	Tool Presets	Araç Ön Ayarları
 	Tools	Araçlar
 	About PhotoCraft	PhotoCraft Hakkında
-	PhotoCraft Website	PhotoCraft Web Sitesi
+	PhotoCraft Website (upstream)	PhotoCraft Web Sitesi (kaynak proje)
 	PhotoCraft on GitHub	GitHub'da PhotoCraft
-	ArtCraft Website	ArtCraft Web Sitesi
-	Join the ArtCraft Discord…	ArtCraft Discord'una katılın…
+	ArtCraft Website (upstream)	ArtCraft Web Sitesi (kaynak proje)
+	ArtCraft Discord (upstream)…	ArtCraft Discord'u (kaynak proje)…
+	ArtCraft Discord (upstream): {url}	ArtCraft Discord'u (kaynak proje): {url}
 	Report an Issue…	Bir Sorun Bildirin…
 	WIA Support…	WIA Desteği…
 	Apply	Uygula
@@ -1143,7 +1144,7 @@
 	Invert All	Tümünü Ters Çevir
 	Invert has no settings.	Tersine çevirmenin hiçbir ayarı yoktur.
 	Italic	italik
-	Join us on Discord	Discord'da bize katılın
+	ArtCraft Discord (upstream)	ArtCraft Discord'u (kaynak proje)
 	Justify all	Hepsini gerekçelendir
 	Justify last centered	Son ortayı iki yana yasla
 	Justify last left	Son sola yasla
@@ -1280,6 +1281,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	PhotoCraft Renkleri Yönetir
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — Rust'ta yazılmış açık kaynaklı, yerel bir resim düzenleyici.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	ArtCraft ekibinin PhotoCraft'ının Gesso craft-suite içindeki değiştirilmiş bir derlemesi. Resmî bir PhotoCraft veya ArtCraft sürümü değildir.
+	Upstream:	Kaynak proje:
 	Pin Depth:	Pim Derinliği:
 	Pixel Length:	Piksel Uzunluğu:
 	Pixels/Centimeter	Piksel/Santimetre

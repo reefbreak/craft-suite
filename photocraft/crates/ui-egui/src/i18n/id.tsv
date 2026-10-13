@@ -71,9 +71,9 @@
 	Revert	Kembalikan
 	Export	Ekspor
 	Quick Export as PNG	Ekspor Cepat ke PNG
-	Send to ArtCraft	Kirim ke ArtCraft
-	Sent {name} to ArtCraft	{name} dikirim ke ArtCraft
-	Couldn't send to ArtCraft: {error}	Tidak dapat mengirim ke ArtCraft: {error}
+	Send to Gesso	Kirim ke Gesso
+	Sent {name} to Gesso	{name} dikirim ke Gesso
+	Couldn't send to Gesso: {error}	Tidak dapat mengirim ke Gesso: {error}
 	Export As…	Ekspor Sebagai…
 	Export Preferences…	Preferensi Ekspor…
 	Save for Web (Legacy)…	Simpan untuk Web (Lama)…
@@ -742,10 +742,11 @@
 	Tool Presets	Preset Alat
 	Tools	Alat
 	About PhotoCraft	Tentang PhotoCraft
-	PhotoCraft Website	Situs Web PhotoCraft
+	PhotoCraft Website (upstream)	Situs Web PhotoCraft (proyek asal)
 	PhotoCraft on GitHub	PhotoCraft di GitHub
-	ArtCraft Website	Situs Web ArtCraft
-	Join the ArtCraft Discord…	Gabung ke Discord ArtCraft…
+	ArtCraft Website (upstream)	Situs Web ArtCraft (proyek asal)
+	ArtCraft Discord (upstream)…	Discord ArtCraft (proyek asal)…
+	ArtCraft Discord (upstream): {url}	Discord ArtCraft (proyek asal): {url}
 	Report an Issue…	Laporkan Masalah…
 	WIA Support…	Dukungan WIA…
 	Apply	Terapkan
@@ -1144,7 +1145,7 @@
 	Invert All	Balikkan Semua
 	Invert has no settings.	Invert tidak punya pengaturan.
 	Italic	Miring
-	Join us on Discord	Gabung bareng kami di Discord
+	ArtCraft Discord (upstream)	Discord ArtCraft (proyek asal)
 	Justify all	Rata penuh semua
 	Justify last centered	Rata penuh, baris terakhir di tengah
 	Justify last left	Rata penuh, baris terakhir di kiri
@@ -1281,6 +1282,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	PhotoCraft Mengelola Warna
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — editor gambar native open-source yang ditulis dengan Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Build PhotoCraft yang dimodifikasi, karya tim ArtCraft, dari Gesso craft-suite. Bukan rilis resmi PhotoCraft atau ArtCraft.
+	Upstream:	Proyek asal:
 	Pin Depth:	Kedalaman Pin:
 	Pixel Length:	Panjang Piksel:
 	Pixels/Centimeter	Piksel/Sentimeter

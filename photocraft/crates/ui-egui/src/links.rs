@@ -1,6 +1,7 @@
 //! Community and project links: the Help menu, the About dialog, the start screen and the title
 //! bar all open these. URLs follow the crafting-app pattern (`getartcraft.com/apps/<app>`,
-//! `github.com/storytold/<app>`).
+//! `github.com/storytold/<app>`). This is a modified build (`docs/brand/README.md`), so every
+//! label calls them the upstream project's.
 
 use serde_json::{Value, json};
 
@@ -32,28 +33,31 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context, url: &str) -> Value {
     json!({"url": url})
 }
 
-/// The prominent "Join us on Discord" button.
+/// The prominent "ArtCraft Discord (upstream)" button.
 pub fn discord_button(app: &mut PhotocraftApp, ui: &mut egui::Ui, min_width: f32) -> egui::Response {
-    let r = crate::widgets::primary_button(ui, tl!("Join us on Discord"), min_width).on_hover_text(DISCORD);
+    let r = crate::widgets::primary_button(ui, tl!("ArtCraft Discord (upstream)"), min_width).on_hover_text(DISCORD);
     if r.clicked() {
         open(app, ui.ctx(), DISCORD);
     }
     r
 }
 
-/// "PhotoCraft website · GitHub · ArtCraft" as links, centred. Clicks route through [`open`] (the
-/// platform browser service) rather than `ui.hyperlink_to`, which uses the unreliable `ctx.open_url`.
+/// "Upstream: PhotoCraft website · GitHub · ArtCraft" as links, centred. Clicks route through
+/// [`open`] (the platform browser service) rather than `ui.hyperlink_to`, which uses the
+/// unreliable `ctx.open_url`.
 pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
+    let prefix = format!("{} ", tl!("Upstream:"));
     let links = [(tl!("PhotoCraft website"), APP_PAGE), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
     let font = egui::FontId::proportional(12.5);
     let sep = "  ·  ";
-    let width: f32 = links.iter().map(|(l, _)| ui.painter().layout_no_wrap((*l).into(), font.clone(), t.text).size().x).sum::<f32>()
-        + 2.0 * ui.painter().layout_no_wrap(sep.into(), font.clone(), t.text).size().x;
+    let text_width = |text: &str| ui.painter().layout_no_wrap(text.into(), font.clone(), t.text).size().x;
+    let width: f32 = text_width(&prefix) + links.iter().map(|(l, _)| text_width(l)).sum::<f32>() + 2.0 * text_width(sep);
     let mut clicked: Option<&str> = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+        ui.label(egui::RichText::new(prefix).font(font.clone()).color(t.text_faint));
         for (i, (label, url)) in links.iter().enumerate() {
             if i > 0 {
                 ui.label(egui::RichText::new(sep).font(font.clone()).color(t.text_faint));

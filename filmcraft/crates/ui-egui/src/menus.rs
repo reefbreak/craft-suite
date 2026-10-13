@@ -134,9 +134,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("mode.import", "Import", [], None),
     uic!("mode.edit", "Edit", [], None),
     uic!("mode.export", "Export", ["File", "Export"], Some("Cmd+M")),
-    uic!("help.discord", "Join the ArtCraft Discord…", ["Help"], None),
-    uic!("help.website", "ArtCraft Website", ["Help"], None),
-    uic!("help.appPage", "FilmCraft on getartcraft.com", ["Help"], None),
+    uic!("help.discord", "FilmCraft Upstream Discord…", ["Help"], None),
+    uic!("help.website", "Upstream Website (getartcraft.com)", ["Help"], None),
+    uic!("help.appPage", "FilmCraft Upstream on getartcraft.com", ["Help"], None),
     uic!("help.github", "FilmCraft on GitHub", ["Help"], None),
     uic!("help.reportIssue", "Report an Issue…", ["Help"], None),
     uic!("help.revealLogFiles", "Reveal Log Files…", ["Help"], None),
@@ -236,7 +236,7 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             return crate::panels::frame_export::open(app, ctx, &params);
         }
     }
-    // File ▸ Send to ArtCraft ▸ Current Frame picks the monitor like Export Frame does.
+    // File ▸ Send to Gesso ▸ Current Frame picks the monitor like Export Frame does.
     if id == "file.sendFrameToArtcraft" && params.get("target").is_none() {
         let source = targets_source(app, &params);
         params.as_object_mut().ok_or("command parameters must be an object")?.insert("target".into(), json!(if source { "source" } else { "program" }));
@@ -578,7 +578,7 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
         && v["finished"] == json!(false)
     {
         let name = v["name"].as_str().unwrap_or_default();
-        app.ui.status = tlf!("Sending {name} to ArtCraft…", name);
+        app.ui.status = tlf!("Sending {name} to Gesso…", name);
     }
     if r.is_ok() && matches!(id, "playhead.start" | "playhead.end") {
         crate::panels::timeline::reveal_playhead(app, ctx);
@@ -652,15 +652,15 @@ fn encode_png(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u8>, Str
     Ok(png)
 }
 
-/// The status-bar message for a finished File ▸ Send to ArtCraft.
+/// The status-bar message for a finished File ▸ Send to Gesso.
 pub fn artcraft_status(outcome: &filmcraft_engine::artcraft::SendOutcome) -> String {
     match &outcome.result {
         Ok(path) => {
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
-            tlf!("Sent to ArtCraft: {name}", name)
+            tlf!("Sent to Gesso: {name}", name)
         }
-        Err(e) if e == "cancelled" => tl!("Send to ArtCraft cancelled").to_string(),
-        Err(error) => tlf!("Send to ArtCraft failed: {error}", error),
+        Err(e) if e == "cancelled" => tl!("Send to Gesso cancelled").to_string(),
+        Err(error) => tlf!("Send to Gesso failed: {error}", error),
     }
 }
 

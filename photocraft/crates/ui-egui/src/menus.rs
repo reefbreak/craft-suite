@@ -39,8 +39,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("edit.freeTransform", "Free Transform", &["Edit"], Some("Cmd+T")),
     ("file.export.exportAs", "Export As…", &["File", "Export"], Some("Cmd+Alt+Shift+W")),
     ("file.export.quickExportAsPng", "Quick Export as PNG", &["File", "Export"], None),
-    // Not a Photoshop item: hands a flattened PNG to ArtCraft's inbox (`export_dialog::send_to_artcraft`).
-    ("file.export.sendToArtcraft", "Send to ArtCraft", &["File", "Export"], None),
+    // Not a Photoshop item: hands a flattened PNG to Gesso's inbox (`export_dialog::send_to_artcraft`).
+    ("file.export.sendToArtcraft", "Send to Gesso", &["File", "Export"], None),
     ("edit.transform.scale", "Scale", &["Edit", "Transform"], None),
     ("edit.transform.rotate", "Rotate", &["Edit", "Transform"], None),
     ("edit.transform.skew", "Skew", &["Edit", "Transform"], None),
@@ -93,9 +93,10 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.breezeDark", "Breeze Dark Theme", &["Window", "Theme"], None),
     ("window.theme.system", "Sync with system", &["Window", "Theme"], None),
     ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
-    ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
-    ("help.website", "PhotoCraft Website", &["Help"], None),
-    ("help.artcraftWebsite", "ArtCraft Website", &["Help"], None),
+    // This is a modified build (docs/brand/README.md): these three open the upstream project.
+    ("help.discord", "ArtCraft Discord (upstream)…", &["Help"], None),
+    ("help.website", "PhotoCraft Website (upstream)", &["Help"], None),
+    ("help.artcraftWebsite", "ArtCraft Website (upstream)", &["Help"], None),
     ("help.github", "PhotoCraft on GitHub", &["Help"], None),
     ("help.reportIssue", "Report an Issue…", &["Help"], None),
     ("help.systemInfo", "System Info…", &["Help"], None),
@@ -706,7 +707,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "file.save" | "file.saveAs" | "file.export.exportAs" | "file.export.quickExportAsPng" => {
             app.session.active().is_some() && app.services.export.is_some()
         }
-        // Desktop only: the web build has no file system, so no ArtCraft inbox service.
+        // Desktop only: the web build has no file system, so no Gesso inbox service.
         "file.export.sendToArtcraft" => app.session.active().is_some() && app.services.send_to_artcraft.is_some(),
         i if i.starts_with("window.toggle.") => true,
         "window.togglePanels" => true,
@@ -2063,11 +2064,11 @@ mod send_to_artcraft_tests {
         let quick = items.iter().position(|i| i.id == "file.export.quickExportAsPng").unwrap();
         let send = &items[quick + 1];
         assert_eq!(send.id, "file.export.sendToArtcraft");
-        assert_eq!((send.label.as_str(), send.path.clone()), ("Send to ArtCraft", vec!["File".to_string(), "Export".to_string()]));
+        assert_eq!((send.label.as_str(), send.path.clone()), ("Send to Gesso", vec!["File".to_string(), "Export".to_string()]));
         assert!(!send.enabled, "no inbox service (the web build): greyed");
         let ctx = egui::Context::default();
         let e = invoke(&mut app, &ctx, "file.export.sendToArtcraft", json!({})).unwrap_err();
-        assert!(e.contains("ArtCraft"), "{e}");
+        assert!(e.contains("Gesso"), "{e}");
         assert!(app.ui.notices.last().is_some_and(|n| n.error));
 
         // The service gets the document's name and Quick Export's PNG.
@@ -2085,7 +2086,7 @@ mod send_to_artcraft_tests {
         assert_eq!(name, &app.session.active().unwrap().doc.name);
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert_eq!(r["bytes"], json!(png.len()));
-        assert!(app.ui.status.contains("ArtCraft") && !app.ui.status_error, "{}", app.ui.status);
+        assert!(app.ui.status.contains("Gesso") && !app.ui.status_error, "{}", app.ui.status);
     }
 }
 

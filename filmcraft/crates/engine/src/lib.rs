@@ -432,7 +432,7 @@ pub struct Session {
     pub export_presets: export_tools::ExportPresetLibrary,
     /// The export queue (session state, not saved with the project).
     pub export_queue: export_tools::ExportQueue,
-    /// File ▸ Send to ArtCraft exports still running, and finished ones not yet shown.
+    /// File ▸ Send to Gesso exports still running, and finished ones not yet shown.
     pub artcraft: artcraft::Sends,
     /// Exports run a batch at a time by [`Session::pump_jobs`] (hosts without threads: web).
     pub stepped: Vec<SteppedJob>,

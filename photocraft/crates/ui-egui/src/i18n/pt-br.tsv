@@ -74,9 +74,9 @@
 	Revert	Reverter
 	Export	Exportar
 	Quick Export as PNG	Exportação rápida como PNG
-	Send to ArtCraft	Enviar para o ArtCraft
-	Sent {name} to ArtCraft	{name} enviado para o ArtCraft
-	Couldn't send to ArtCraft: {error}	Não foi possível enviar para o ArtCraft: {error}
+	Send to Gesso	Enviar para o Gesso
+	Sent {name} to Gesso	{name} enviado para o Gesso
+	Couldn't send to Gesso: {error}	Não foi possível enviar para o Gesso: {error}
 	Export As…	Exportar como…
 	Export Preferences…	Preferências de exportação…
 	Save for Web (Legacy)…	Salvar para Web (legado)…
@@ -744,10 +744,11 @@
 	Tool Presets	Predefinições de ferramentas
 	Tools	Ferramentas
 	About PhotoCraft	Sobre o PhotoCraft
-	PhotoCraft Website	Site do PhotoCraft
+	PhotoCraft Website (upstream)	Site do PhotoCraft (projeto original)
 	PhotoCraft on GitHub	PhotoCraft no GitHub
-	ArtCraft Website	Site do ArtCraft
-	Join the ArtCraft Discord…	Participe do Discord do ArtCraft…
+	ArtCraft Website (upstream)	Site do ArtCraft (projeto original)
+	ArtCraft Discord (upstream)…	Discord do ArtCraft (projeto original)…
+	ArtCraft Discord (upstream): {url}	Discord do ArtCraft (projeto original): {url}
 	Report an Issue…	Relatar um problema…
 	WIA Support…	Suporte a WIA…
 	Apply	Aplicar
@@ -1147,7 +1148,7 @@
 	Invert All	Inverter tudo
 	Invert has no settings.	Inverter não tem configurações.
 	Italic	Itálico
-	Join us on Discord	Participe do nosso Discord
+	ArtCraft Discord (upstream)	Discord do ArtCraft (projeto original)
 	Justify all	Justificar tudo
 	Justify last centered	Justificar com a última linha centralizada
 	Justify last left	Justificar com a última linha à esquerda
@@ -1284,6 +1285,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	O PhotoCraft gerencia as cores
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — um editor de imagens nativo e de código aberto escrito em Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Uma versão modificada do PhotoCraft da equipe do ArtCraft, da Gesso craft-suite. Não é uma versão oficial do PhotoCraft nem do ArtCraft.
+	Upstream:	Projeto original:
 	Pin Depth:	Profundidade do alfinete:
 	Pixel Length:	Comprimento em pixels:
 	Pixels/Centimeter	Pixels/centímetro

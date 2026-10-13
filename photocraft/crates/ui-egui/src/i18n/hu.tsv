@@ -188,9 +188,9 @@
 	Puppet Warp	Bábtorzítás
 	Purge	Memória ürítése
 	Quick Export as PNG	Gyors exportálás PNG-be
-	Send to ArtCraft	Küldés az ArtCraftba
-	Sent {name} to ArtCraft	{name} elküldve az ArtCraftba
-	Couldn't send to ArtCraft: {error}	Nem sikerült elküldeni az ArtCraftba: {error}
+	Send to Gesso	Küldés a Gessóba
+	Sent {name} to Gesso	{name} elküldve a Gessóba
+	Couldn't send to Gesso: {error}	Nem sikerült elküldeni a Gessóba: {error}
 	Raw Defaults…	Raw-alapértékek…
 	Record Measurements	Mérések rögzítése
 	Redo	Újra
@@ -434,7 +434,7 @@
 	Artboard Guides	Rajztábla-segédvonalak
 	Artboards to Files	Rajztáblák fájlokba
 	Artboards to PDF	Rajztáblák PDF-be
-	ArtCraft Website	ArtCraft-weboldal
+	ArtCraft Website (upstream)	ArtCraft-weboldal (eredeti projekt)
 	Average	Átlag
 	Background From Layer	Háttér a rétegből
 	Bitmap…	Bittérkép…
@@ -589,7 +589,7 @@
 	Inverse	Megfordítás
 	Iris Blur…	Íriszelmosás…
 	Join the ArtCraft Discord	Csatlakozás az ArtCraft Discordhoz
-	Join the ArtCraft Discord…	Csatlakozás az ArtCraft Discordhoz…
+	ArtCraft Discord (upstream)…	ArtCraft Discord (eredeti projekt)…
 	Language	Nyelv
 	Language Options	Nyelvi beállítások
 	Large	Nagy
@@ -684,7 +684,7 @@
 	Pattern Preview	Mintázat előnézete
 	PhotoCraft	PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft a GitHubon
-	PhotoCraft Website	PhotoCraft-weboldal
+	PhotoCraft Website (upstream)	PhotoCraft-weboldal (eredeti projekt)
 	Photography	Fotózás
 	Picture Frame…	Képkeret…
 	Pinch…	Becsípés…
@@ -1790,7 +1790,7 @@ layerLabel	Magenta	Bíbor
 	Intersect with	Metszet ezzel
 	Intersect with selection  ({key})	Metszet a kijelöléssel  ({key})
 	Invalid panel layout; restored the default dock	Érvénytelen panelelrendezés; az alapértelmezett dokkolás visszaállítva
-	Join the ArtCraft Discord ({url})	Csatlakozz az ArtCraft Discord-szerveréhez ({url})
+	ArtCraft Discord (upstream): {url}	ArtCraft Discord (eredeti projekt): {url}
 	Keyboard Shortcuts	Billentyűparancsok
 	Kind	Fajta
 	Lasso	Lasszó
@@ -2838,6 +2838,8 @@ cameraRaw	Yellow	Sárga
 	PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.	A PhotoCraft tovább próbálkozik; amíg a mentés nem sikerül, a beállítások módosításai bezáráskor elvesznek.
 	PhotoCraft Manages Colors	A PhotoCraft kezeli a színeket
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft – nyílt forráskódú, natív képszerkesztő Rust nyelven.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	A PhotoCraft módosított változata az ArtCraft csapatától, a Gesso craft-suite részeként. Nem hivatalos PhotoCraft- vagy ArtCraft-kiadás.
+	Upstream:	Eredeti projekt:
 	Picas	Pica
 	Pixels	Pixel
 	Pixels/Centimeter	Pixel/centiméter
@@ -3272,7 +3274,7 @@ cameraRaw	Yellow	Sárga
 	Interval	Intervallum
 	Invalid {mode} profile	Érvénytelen profil ({mode})
 	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	A dokumentum rétegei nem férnek el a GPU memóriakeretében. Ha a Beállítások › Teljesítmény alatt növeled a memóriahasználatot, a keret is nő, legfeljebb a számítógép memóriájának negyedéig.
-	Join us on Discord	Csatlakozz hozzánk a Discordon
+	ArtCraft Discord (upstream)	ArtCraft Discord (eredeti projekt)
 	Keep Using CPU	Marad a CPU
 	Kernel	Szűrőmag
 	Keyboard	Billentyűzet

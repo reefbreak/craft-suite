@@ -684,7 +684,7 @@ mod tests {
             "file.saveAs",
             "file.saveACopy",
             "file.export.saveForWebLegacy",
-            // Writes into ArtCraft's inbox outside the automation write root (docs/control-protocol.md).
+            // Writes into Gesso's inbox outside the automation write root (docs/control-protocol.md).
             "file.export.sendToArtcraft",
             "pattern.import",
             "layer.smartObjects.exportContents",

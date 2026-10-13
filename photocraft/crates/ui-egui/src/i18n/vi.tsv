@@ -128,9 +128,9 @@
 	Puppet Warp	Biến dạng con rối
 	Purge	Dọn
 	Quick Export as PNG	Xuất nhanh dạng PNG
-	Send to ArtCraft	Gửi đến ArtCraft
-	Sent {name} to ArtCraft	Đã gửi {name} đến ArtCraft
-	Couldn't send to ArtCraft: {error}	Không thể gửi đến ArtCraft: {error}
+	Send to Gesso	Gửi đến Gesso
+	Sent {name} to Gesso	Đã gửi {name} đến Gesso
+	Couldn't send to Gesso: {error}	Không thể gửi đến Gesso: {error}
 	Raw Defaults…	Mặc định Camera Raw…
 	Redo	Làm lại
 	Remove Warp Split	Gỡ tách biến dạng
@@ -629,7 +629,7 @@
 	6-up	6 cửa sổ
 	About PhotoCraft	Giới thiệu PhotoCraft
 	Actions	Thao tác
-	ArtCraft Website	Trang web ArtCraft
+	ArtCraft Website (upstream)	Trang web ArtCraft (dự án gốc)
 	Brush Settings	Thiết lập cọ
 	Brushes	Cọ
 	Cascade	Xếp tầng
@@ -649,7 +649,8 @@
 	Histogram	Histogram
 	History	Lịch sử
 	Info	Thông tin
-	Join the ArtCraft Discord…	Tham gia Discord ArtCraft…
+	ArtCraft Discord (upstream)…	Discord ArtCraft (dự án gốc)…
+	ArtCraft Discord (upstream): {url}	Discord ArtCraft (dự án gốc): {url}
 	Layer Comps	Tổ hợp lớp
 	Lock Workspace	Khóa không gian làm việc
 	Match All	Đồng bộ tất cả
@@ -670,7 +671,7 @@
 	Paths	Đường dẫn
 	Patterns	Họa tiết
 	PhotoCraft on GitHub	PhotoCraft trên GitHub
-	PhotoCraft Website	Trang web PhotoCraft
+	PhotoCraft Website (upstream)	Trang web PhotoCraft (dự án gốc)
 	Photography	Nhiếp ảnh
 	Pixel Art	Pixel Art
 	Pro Medium Gray Theme	Chủ đề Pro xám vừa
@@ -1515,6 +1516,8 @@ cameraRaw	Shadows	Vùng tối
 	Contributors	Người đóng góp
 	Models	Mô hình
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — trình chỉnh sửa ảnh gốc mã nguồn mở viết bằng Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Bản dựng PhotoCraft đã sửa đổi của nhóm ArtCraft, thuộc Gesso craft-suite. Không phải bản phát hành chính thức của PhotoCraft hay ArtCraft.
+	Upstream:	Dự án gốc:
 	Version {version}	Phiên bản {version}
 	Unsaved changes	Thay đổi chưa lưu
 	Answer the unsaved-changes prompt first	Hãy trả lời hộp thoại thay đổi chưa lưu trước
@@ -1923,7 +1926,7 @@ colorRange	Invert	Đảo ngược
 
 # Visual QA finalization
 	New document…	Tài liệu mới…
-	Join us on Discord	Tham gia Discord
+	ArtCraft Discord (upstream)	Discord ArtCraft (dự án gốc)
 	PhotoCraft website	Trang web PhotoCraft
 	Anchor:	Neo:
 	Canvas extension color:	Màu mở rộng canvas:

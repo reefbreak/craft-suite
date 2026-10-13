@@ -57,9 +57,9 @@
 	Revert	Επαναφορά αποθηκευμένης έκδοσης
 	Export	Εξαγωγή
 	Quick Export as PNG	Γρήγορη εξαγωγή σε PNG
-	Send to ArtCraft	Αποστολή στο ArtCraft
-	Sent {name} to ArtCraft	Το {name} στάλθηκε στο ArtCraft
-	Couldn't send to ArtCraft: {error}	Δεν ήταν δυνατή η αποστολή στο ArtCraft: {error}
+	Send to Gesso	Αποστολή στο Gesso
+	Sent {name} to Gesso	Το {name} στάλθηκε στο Gesso
+	Couldn't send to Gesso: {error}	Δεν ήταν δυνατή η αποστολή στο Gesso: {error}
 	Export As…	Εξαγωγή ως…
 	Export Preferences…	Προτιμήσεις εξαγωγής…
 	Save for Web (Legacy)…	Αποθήκευση για ιστό (παλαιού τύπου)…
@@ -777,6 +777,8 @@
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Μετασχηματισμός προοπτικής: σχεδιάστε επίπεδα σύμφωνα με την προοπτική της εικόνας και έπειτα επιλέξτε Παραμόρφωση
 	PhotoCraft Manages Colors	Διαχείριση χρωμάτων από το PhotoCraft
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — εγγενής εφαρμογή επεξεργασίας εικόνας ανοικτού κώδικα, γραμμένη σε Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Τροποποιημένη έκδοση του PhotoCraft από την ομάδα του ArtCraft, από το Gesso craft-suite. Δεν είναι επίσημη κυκλοφορία του PhotoCraft ή του ArtCraft.
+	Upstream:	Αρχικό έργο:
 	Pixels/Centimeter	Εικονοστοιχεία/εκατοστό
 	Pixels/Inch	Εικονοστοιχεία/ίντσα
 	Position and Size	Θέση και μέγεθος
@@ -2020,7 +2022,7 @@
 	Arc	Τόξο
 	Arch	Καμάρα
 	Art & Illustration	Τέχνη και εικονογράφηση
-	ArtCraft Website	Ιστότοπος ArtCraft
+	ArtCraft Website (upstream)	Ιστότοπος ArtCraft (αρχικό έργο)
 	Artboard Background Color	Χρώμα φόντου πίνακα σχεδίασης
 	Artboard Guides	Οδηγοί πίνακα σχεδίασης
 	Artboard from Group	Πίνακας σχεδίασης από ομάδα
@@ -2516,8 +2518,9 @@
 	Iris Blur…	Θόλωση ίριδας…
 	Italic	Πλάγια
 	Jag	Οδοντωτό
-	Join the ArtCraft Discord…	Συμμετοχή στο Discord του ArtCraft…
-	Join us on Discord	Ελάτε στην κοινότητά μας στο Discord
+	ArtCraft Discord (upstream)…	Discord του ArtCraft (αρχικό έργο)…
+	ArtCraft Discord (upstream): {url}	Discord του ArtCraft (αρχικό έργο): {url}
+	ArtCraft Discord (upstream)	Discord του ArtCraft (αρχικό έργο)
 	Jpeg quality	Ποιότητα JPEG
 	Justification	Πλήρης στοίχιση
 	Justify	Πλήρης στοίχιση
@@ -2757,7 +2760,7 @@
 	Performance	Επιδόσεις
 	Perspective Warp	Παραμόρφωση προοπτικής
 	Photo	Φωτογραφία
-	PhotoCraft Website	Ιστότοπος PhotoCraft
+	PhotoCraft Website (upstream)	Ιστότοπος PhotoCraft (αρχικό έργο)
 	PhotoCraft on GitHub	PhotoCraft στο GitHub
 	Photocopy	Φωτοαντίγραφο
 	Photography	Φωτογραφία

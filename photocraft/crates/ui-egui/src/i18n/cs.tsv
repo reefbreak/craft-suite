@@ -80,9 +80,9 @@
 	Revert	Vrátit k uložené verzi
 	Export	Export
 	Quick Export as PNG	Rychlý export do PNG
-	Send to ArtCraft	Odeslat do ArtCraft
-	Sent {name} to ArtCraft	Soubor {name} odeslán do ArtCraft
-	Couldn't send to ArtCraft: {error}	Nelze odeslat do ArtCraft: {error}
+	Send to Gesso	Odeslat do Gesso
+	Sent {name} to Gesso	Soubor {name} odeslán do Gesso
+	Couldn't send to Gesso: {error}	Nelze odeslat do Gesso: {error}
 	Export As…	Exportovat jako…
 	Export Preferences…	Předvolby exportu…
 	Save for Web (Legacy)…	Uložit pro web (starší)…
@@ -766,10 +766,10 @@
 	Tool Presets	Přednastavení nástrojů
 	Tools	Nástroje
 	About PhotoCraft	O aplikaci PhotoCraft
-	PhotoCraft Website	Web PhotoCraft
+	PhotoCraft Website (upstream)	Web PhotoCraft (původní projekt)
 	PhotoCraft on GitHub	PhotoCraft na GitHubu
-	ArtCraft Website	Web ArtCraft
-	Join the ArtCraft Discord…	Připojit se k Discordu ArtCraft…
+	ArtCraft Website (upstream)	Web ArtCraft (původní projekt)
+	ArtCraft Discord (upstream)…	Discord ArtCraft (původní projekt)…
 	Report an Issue…	Nahlásit problém…
 	WIA Support…	Podpora WIA…
 	Apply	Použít
@@ -1182,7 +1182,7 @@
 	Invert All	Invertovat vše
 	Invert has no settings.	Invertovat nemá žádná nastavení.
 	Italic	Kurzíva
-	Join us on Discord	Přidejte se k nám na Discordu
+	ArtCraft Discord (upstream)	Discord ArtCraft (původní projekt)
 	Justify all	Do bloku vše
 	Justify last centered	Do bloku, poslední řádek na střed
 	Justify last left	Do bloku, poslední řádek vlevo
@@ -1319,6 +1319,8 @@
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	Barvy spravuje PhotoCraft
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — nativní editor obrázků s otevřeným zdrojovým kódem napsaný v jazyce Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Upravené sestavení PhotoCraft od týmu ArtCraft z Gesso craft-suite. Nejde o oficiální vydání PhotoCraft ani ArtCraft.
+	Upstream:	Původní projekt:
 	Pin Depth:	Hloubka špendlíku:
 	Pixel Length:	Délka v pixelech:
 	Pixels/Centimeter	Pixely/centimetr
@@ -3639,7 +3641,7 @@ navigator	Zoom	Zvětšení
 	on	zapnuto
 	off	vypnuto
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Tato úprava ({key}) se uchovává v importované podobě a zatím ji nelze měnit.
-	Join the ArtCraft Discord ({url})	Přidejte se na Discord ArtCraft ({url})
+	ArtCraft Discord (upstream): {url}	Discord ArtCraft (původní projekt): {url}
 	{index} of {total}	{index} z {total}
 @plural	{n} step|{n} steps	{n} krok|{n} kroky|{n} kroků
 	{shortcut} assigned.	Zkratka {shortcut} přiřazena.

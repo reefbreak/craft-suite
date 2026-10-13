@@ -4,7 +4,7 @@
 # Clean-room: every entry was written from the plain meaning of the English text using ordinary
 # Japanese computing and video-editing vocabulary (クリップ, シーケンス, トラック, 再生ヘッド, ぼかし ...). No
 # proprietary localisation resource, string table or product UI was consulted or copied; add entries
-# the same way. Product and technology names (FilmCraft, ArtCraft, Lumetri, ProRes, LUFS ...) keep
+# the same way. Product and technology names (FilmCraft, ArtCraft, Gesso, Lumetri, ProRes, LUFS ...) keep
 # their spelling.
 #
 # House style, so new entries read like the rest:
@@ -42,7 +42,7 @@
 	Apply Default Transitions to Selection	選択範囲に既定のトランジションを適用
 	Apply Video Transition	ビデオトランジションを適用
 	Arrange	重ね順
-	ArtCraft Website	ArtCraft の Web サイト
+	Upstream Website (getartcraft.com)	本家の Web サイト (getartcraft.com)
 	Assembly	アセンブリ
 	Attach Proxies…	プロキシを関連付け…
 	Audio Channels…	オーディオチャンネル…
@@ -137,7 +137,7 @@
 	Fill frame	フレームを埋める
 	FilmCraft Help…	FilmCraft ヘルプ…
 	FilmCraft on GitHub	GitHub の FilmCraft
-	FilmCraft on getartcraft.com	getartcraft.com の FilmCraft
+	FilmCraft Upstream on getartcraft.com	getartcraft.com の本家 FilmCraft
 	Find Next	次を検索
 	Find…	検索…
 	Fit	合わせる
@@ -181,7 +181,7 @@
 	Insert Frame Hold Segment	フレームホールドセグメントを挿入
 	Install Motion Graphics Template…	モーショングラフィックステンプレートをインストール…
 	Interpret Footage…	素材を解釈…
-	Join the ArtCraft Discord…	ArtCraft の Discord に参加…
+	FilmCraft Upstream Discord…	FilmCraft 本家の Discord…
 	Keyboard Shortcuts…	キーボードショートカット…
 	Label	ラベル
 	Labels…	ラベル…
@@ -371,7 +371,7 @@
 	Master volume: use the Audio Track Mixer	マスター音量はオーディオトラックミキサーで調整してください
 	Search	検索
 	Quick Export	クイック書き出し
-	Join the ArtCraft Discord (discord.gg/artcraft)	ArtCraft の Discord に参加 (discord.gg/artcraft)
+	FilmCraft upstream Discord (discord.gg/artcraft)	FilmCraft 本家の Discord (discord.gg/artcraft)
 	Cancel	キャンセル
 	OK	OK
 	Interpret Footage	素材を解釈
@@ -410,8 +410,9 @@
 	Delete Audio Tracks	オーディオトラックを削除する
 	All Empty Tracks	すべての空のトラック
 	Version {version}	バージョン {version}
-	A clean-room, pure-Rust non-linear video editor. Part of the ArtCraft family.	Rust だけで書かれた、クリーンルーム設計のノンリニアビデオ編集ソフトです。ArtCraft ファミリーの一員です。
-	Join the ArtCraft Discord	ArtCraft の Discord に参加
+	A clean-room, pure-Rust non-linear video editor.	Rust だけで書かれた、クリーンルーム設計のノンリニアビデオ編集ソフトです。
+	A modified build of FilmCraft by the ArtCraft team, from the Gesso craft-suite. Not an official FilmCraft or ArtCraft release.	ArtCraft チームの FilmCraft を改変したビルドで、Gesso craft-suite に含まれています。FilmCraft および ArtCraft の公式リリースではありません。
+	FilmCraft upstream Discord	FilmCraft 本家の Discord
 	Source code on GitHub	GitHub のソースコード
 	Report an issue	問題を報告
 	MIT OR Apache-2.0. Fonts: Inter, Noto Serif and JetBrains Mono (SIL OFL 1.1).	MIT OR Apache-2.0。フォント: Inter、Noto Serif、JetBrains Mono (SIL OFL 1.1)。
@@ -452,7 +453,6 @@
 	Bars and Tone	カラーバーとトーン
 	SMPTE HD bars with 1 kHz reference tone	1 kHz 基準トーン付きの SMPTE HD カラーバー
 	Community	コミュニティ
-	Join us on Discord	Discord に参加
 	OMF Export Settings	OMF 書き出し設定
 	AAF Export Settings	AAF 書き出し設定
 	OMF Title:	OMF タイトル:
@@ -3594,10 +3594,10 @@
 	Export the labels to a preset file…	ラベルをプリセットファイルに書き出し…
 	Show the presets folder	プリセットフォルダーを表示
 	Delete this preset	このプリセットを削除
-	Send to ArtCraft	ArtCraft に送信
+	Send to Gesso	Gesso に送信
 	Current Frame	現在のフレーム
 	Active Sequence	アクティブなシーケンス
-	Sending {name} to ArtCraft…	{name} を ArtCraft に送信しています…
-	Sent to ArtCraft: {name}	ArtCraft に送信しました: {name}
-	Send to ArtCraft failed: {error}	ArtCraft への送信に失敗しました: {error}
-	Send to ArtCraft cancelled	ArtCraft への送信をキャンセルしました
+	Sending {name} to Gesso…	{name} を Gesso に送信しています…
+	Sent to Gesso: {name}	Gesso に送信しました: {name}
+	Send to Gesso failed: {error}	Gesso への送信に失敗しました: {error}
+	Send to Gesso cancelled	Gesso への送信をキャンセルしました

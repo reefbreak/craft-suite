@@ -88,9 +88,9 @@
 	Export…	Экспортировать…
 	Quick Export As PNG	Быстрый экспорт в PNG
 	Quick Export as PNG	Быстрый экспорт в PNG
-	Send to ArtCraft	Отправить в ArtCraft
-	Sent {name} to ArtCraft	{name} отправлен в ArtCraft
-	Couldn't send to ArtCraft: {error}	Не удалось отправить в ArtCraft: {error}
+	Send to Gesso	Отправить в Gesso
+	Sent {name} to Gesso	{name} отправлен в Gesso
+	Couldn't send to Gesso: {error}	Не удалось отправить в Gesso: {error}
 	Place Embedded…	Поместить встроенный…
 	Place Linked…	Поместить связанный…
 	Package…	Упаковать…
@@ -509,11 +509,12 @@
 
 # Help
 	About PhotoCraft	О программе PhotoCraft
-	PhotoCraft Website	Сайт PhotoCraft
+	PhotoCraft Website (upstream)	Сайт PhotoCraft (исходный проект)
 	PhotoCraft on GitHub	PhotoCraft на GitHub
 	Report an Issue…	Сообщить о проблеме…
-	ArtCraft Website	Сайт ArtCraft
-	Join the ArtCraft Discord…	Discord сообщества ArtCraft…
+	ArtCraft Website (upstream)	Сайт ArtCraft (исходный проект)
+	ArtCraft Discord (upstream)…	Discord ArtCraft (исходный проект)…
+	ArtCraft Discord (upstream): {url}	Discord ArtCraft (исходный проект): {url}
 	System Info…	Информация о системе…
 
 # Tools and options bar
@@ -1635,7 +1636,7 @@
 	Preserve Transparency	Сохранить прозрачность
 	Reverse	Обратить
 	Align with layer	По слою
-	Join us on Discord	Мы в Discord
+	ArtCraft Discord (upstream)	Discord ArtCraft (исходный проект)
 	PhotoCraft website	Сайт PhotoCraft
 	ArtCraft	ArtCraft
 	GitHub	GitHub
@@ -2133,6 +2134,8 @@
 	Pattern Size	Размер паттерна
 	PhotoCraft	PhotoCraft
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — открытый нативный графический редактор на Rust.
+	A modified build of PhotoCraft by the ArtCraft team, from the Gesso craft-suite. Not an official PhotoCraft or ArtCraft release.	Изменённая сборка PhotoCraft от команды ArtCraft из Gesso craft-suite. Это не официальный выпуск PhotoCraft или ArtCraft.
+	Upstream:	Исходный проект:
 	Position and Size	Положение и размер
 	Preserve Details	Сохранять детали
 	Preserve Luminosity	Сохранять светлоту

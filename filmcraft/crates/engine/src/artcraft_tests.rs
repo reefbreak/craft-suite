@@ -1,4 +1,4 @@
-//! File ▸ Send to ArtCraft: the frame and the sequence land in the inbox under their final
+//! File ▸ Send to Gesso: the frame and the sequence land in the inbox under their final
 //! `FilmCraft - <name>` names, never as a visible partial file, without overwriting earlier sends.
 
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ fn frame_lands_in_the_inbox_under_its_final_name() {
     assert_eq!(files_in(&inbox.0), [format!("{PREFIX}Sequence 01 2.png"), format!("{PREFIX}Sequence 01.png"), format!("{PREFIX}Source clip.png")]);
     let finished = s.artcraft.take_finished();
     assert_eq!(finished.len(), 3);
-    assert!(finished.iter().all(|o| o.result.is_ok() && o.message().starts_with("Sent to ArtCraft")));
+    assert!(finished.iter().all(|o| o.result.is_ok() && o.message().starts_with("Sent to Gesso")));
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn background_sequence_send_is_renamed_when_the_job_finishes() {
     let finished = s.artcraft.take_finished();
     assert_eq!(finished.len(), 1);
     assert_eq!(finished[0].job, r["job"].as_u64());
-    assert_eq!(finished[0].message(), format!("Sent to ArtCraft: {PREFIX}Sequence 01 2.mp4"));
+    assert_eq!(finished[0].message(), format!("Sent to Gesso: {PREFIX}Sequence 01 2.mp4"));
 }
 
 #[test]
@@ -114,9 +114,9 @@ fn sequence_send_needs_a_sequence_and_both_are_in_the_file_menu() {
     assert!(!s.is_enabled("file.sendSequenceToArtcraft"));
     assert!(s.is_enabled("file.sendFrameToArtcraft"), "enabled; it reports why it cannot run");
     for id in ["file.sendFrameToArtcraft", "file.sendSequenceToArtcraft"] {
-        assert_eq!(crate::find_command(id).unwrap().menu, ["File", "Send to ArtCraft"]);
+        assert_eq!(crate::find_command(id).unwrap().menu, ["File", "Send to Gesso"]);
     }
-    // File ▸ Send to ArtCraft follows the first File ▸ Export item
+    // File ▸ Send to Gesso follows the first File ▸ Export item
     let specs = crate::command_specs();
     let export = specs.iter().position(|c| c.menu == ["File", "Export"]).unwrap();
     assert_eq!(specs[export + 1].id, "file.sendFrameToArtcraft");
@@ -172,7 +172,7 @@ fn poll_until_settled(s: &mut Session) {
 fn assert_mp4(path: &Path) {
     let bytes = std::fs::read(path).unwrap();
     assert!(bytes.len() > 1000 && bytes.get(4..8) == Some(b"ftyp".as_slice()), "{} is not an MP4", path.display());
-    let Some(ffprobe) = filmcraft_testkit::ffprobe_or_skip("Send to ArtCraft") else { return };
+    let Some(ffprobe) = filmcraft_testkit::ffprobe_or_skip("Send to Gesso") else { return };
     let out = std::process::Command::new(ffprobe).args(["-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0"]).arg(path).output().unwrap();
     let codecs = String::from_utf8_lossy(&out.stdout);
     assert!(codecs.contains("h264") && codecs.contains("aac"), "{codecs}");

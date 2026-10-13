@@ -634,7 +634,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if ui
                             .add(discord)
                             .on_hover_text({
-                                let template = "Join the ArtCraft Discord ({url})";
+                                let template = "ArtCraft Discord (upstream): {url}";
                                 crate::i18n::fmt(tl!(template), &[("url", crate::links::DISCORD)])
                             })
                             .clicked()
