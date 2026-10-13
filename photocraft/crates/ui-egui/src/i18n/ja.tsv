@@ -74,6 +74,9 @@
 	Revert	復帰
 	Export	書き出し
 	Quick Export as PNG	PNG としてクイック書き出し
+	Send to ArtCraft	ArtCraft に送信
+	Sent {name} to ArtCraft	{name} を ArtCraft に送信しました
+	Couldn't send to ArtCraft: {error}	ArtCraft に送信できませんでした: {error}
 	Export As…	書き出し形式を指定…
 	Export Preferences…	書き出しの環境設定…
 	Save for Web (Legacy)…	Web 用に保存 (従来方式)…

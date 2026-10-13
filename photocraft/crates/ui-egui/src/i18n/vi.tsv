@@ -128,6 +128,9 @@
 	Puppet Warp	Biến dạng con rối
 	Purge	Dọn
 	Quick Export as PNG	Xuất nhanh dạng PNG
+	Send to ArtCraft	Gửi đến ArtCraft
+	Sent {name} to ArtCraft	Đã gửi {name} đến ArtCraft
+	Couldn't send to ArtCraft: {error}	Không thể gửi đến ArtCraft: {error}
 	Raw Defaults…	Mặc định Camera Raw…
 	Redo	Làm lại
 	Remove Warp Split	Gỡ tách biến dạng

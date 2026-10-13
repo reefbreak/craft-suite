@@ -383,6 +383,27 @@ fn export_preferences_drive_quick_export() {
 }
 
 #[test]
+fn quick_export_png_bytes_match_quick_export_and_keep_transparency() {
+    let dir = tmp("quick_png_bytes");
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let doc = s.active().unwrap().doc.clone();
+        let bytes = quick_export_png(&doc, &s.prefs().export).unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "depth {depth}");
+        let img = photocraft_codecs::decode(&bytes).unwrap();
+        assert_eq!(img.dimensions(), (64, 48));
+        let rgba = img.to_rgba8();
+        assert_eq!(rgba[3], 0, "depth {depth}: the transparent corner stays transparent");
+        let at = |x: usize, y: usize| &rgba[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4];
+        assert_eq!(at(10, 10), [255, 0, 0, 255], "depth {depth}");
+        // The same bytes Quick Export as PNG writes.
+        let path = format!("{dir}/same-{depth}.png");
+        s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "depth {depth}");
+    }
+}
+
+#[test]
 fn webp_export_preferences_select_lossless_or_lossy_output() {
     let dir = tmp("quick_webp_quality");
     let mut s = session(8);

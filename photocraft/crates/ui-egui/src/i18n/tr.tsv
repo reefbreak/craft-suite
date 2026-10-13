@@ -63,6 +63,9 @@
 	Revert	Geri Döndür
 	Export	Dışa Aktar
 	Quick Export as PNG	PNG Olarak Hızlı Dışa Aktarma
+	Send to ArtCraft	ArtCraft'a Gönder
+	Sent {name} to ArtCraft	{name}, ArtCraft'a gönderildi
+	Couldn't send to ArtCraft: {error}	ArtCraft'a gönderilemedi: {error}
 	Export As…	Farklı Dışa Aktar…
 	Export Preferences…	Dışa Aktarma Tercihleri…
 	Save for Web (Legacy)…	Web İçin Kaydet (Eski)…

@@ -387,6 +387,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         save_file: Some(Arc::new(save_file)),
         file_dialog: Some(Box::new(show_file_dialog)),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
+        send_to_artcraft: Some(send_to_artcraft(crate::artcraft_inbox::inbox_dir(|k| std::env::var_os(k)))),
         automation_read,
         automation_write,
         automation_open_pcraft,
@@ -444,6 +445,16 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         is_wayland: false,
         ..recovery_services(recovery_dir())
     }
+}
+
+/// File › Export › Send to ArtCraft: writes into `inbox` (ArtCraft's `<home>/Artcraft/inbox`; a
+/// temporary folder in tests). `None` (no home folder) makes every send fail with a reason.
+fn send_to_artcraft(inbox: Option<PathBuf>) -> photocraft_ui_egui::SendToArtcraftFn {
+    Box::new(move |doc_name: &str, png: &[u8]| {
+        let dir = inbox.as_deref().ok_or("no home folder to find ArtCraft's inbox in")?;
+        let path = crate::artcraft_inbox::send(dir, doc_name, png).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    })
 }
 
 /// Preferences ▸ General ▸ Beep When Done: the platform's default information beep.
@@ -666,6 +677,46 @@ mod tests {
             assert!(save_filters(name)[0].1.iter().any(|e| e == ext), "{name}: {:?}", save_filters(name)[0]);
         }
         assert_eq!(save_filters("Untitled")[0].0, "PSD Document", "no extension keeps the default");
+    }
+
+    /// File › Export › Send to ArtCraft end to end, with the inbox in a temporary folder: a
+    /// flattened, transparent PNG appears under ArtCraft's naming, never over an older file.
+    #[test]
+    fn send_to_artcraft_writes_a_transparent_png_into_the_inbox() {
+        let root = std::env::temp_dir().join(format!("photocraft-send-artcraft-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let inbox = root.join("Artcraft").join("inbox");
+        let services = Services { send_to_artcraft: Some(send_to_artcraft(Some(inbox.clone()))), ..Default::default() };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 6, "height": 4, "name": "cat.psd", "background": "transparent"})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let item = photocraft_ui_egui::menus::menu_items(&app).into_iter().find(|i| i.id == "file.export.sendToArtcraft").unwrap();
+        assert!(item.enabled);
+        for (n, name) in [(1, "PhotoCraft - cat.png"), (2, "PhotoCraft - cat 2.png")] {
+            let r = photocraft_ui_egui::menus::invoke(&mut app, &ctx, "file.export.sendToArtcraft", json!({})).unwrap();
+            let path = inbox.join(name);
+            assert_eq!(r["path"], json!(path.to_string_lossy()), "send {n}");
+            assert!(app.ui.status.contains(name) && !app.ui.status_error, "{}", app.ui.status);
+            let img = photocraft_codecs::decode(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(img.dimensions(), (6, 4));
+            let rgba = img.to_rgba8();
+            assert_eq!(&rgba[..4], [255, 0, 0, 255], "the filled corner");
+            assert_eq!(rgba[(4 * 6 - 1) * 4 + 3], 0, "the untouched corner stays transparent");
+        }
+        let mut names: Vec<String> = std::fs::read_dir(&inbox).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["PhotoCraft - cat 2.png", "PhotoCraft - cat.png"], "no partial files remain");
+
+        // Without a home folder the send fails with a notice and writes nothing.
+        app.services.send_to_artcraft = Some(send_to_artcraft(None));
+        let e = photocraft_ui_egui::menus::invoke(&mut app, &ctx, "file.export.sendToArtcraft", json!({})).unwrap_err();
+        assert!(e.contains("ArtCraft") && e.contains("home folder"), "{e}");
+        assert!(app.ui.status_error);
+        assert!(app.ui.notices.last().is_some_and(|n| n.error && n.title == e));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

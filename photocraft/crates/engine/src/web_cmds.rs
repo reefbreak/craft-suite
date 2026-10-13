@@ -956,20 +956,7 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     };
-    let metadata = serde_json::to_value(prefs.metadata).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-    let mut o = serde_json::Map::new();
-    o.insert(
-        "metadata".into(),
-        json!(if metadata == "all" {
-            "all"
-        } else if metadata == "none" {
-            "none"
-        } else {
-            "copyright"
-        }),
-    );
-    o.insert("convertToSrgb".into(), json!(prefs.convert_to_srgb));
-    o.insert("transparency".into(), json!(true));
+    let mut o = quick_export_options(&prefs);
     match fmt.as_str() {
         "jpg" => {
             o.insert("format".into(), json!("jpeg"));
@@ -992,11 +979,46 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
             o.insert("format".into(), json!("png24"));
         }
     }
-    let q = Value::Object(o);
+    let bytes = quick_export_bytes(&doc, Value::Object(o), cmd)?;
+    write_file(&path, &bytes)?;
+    crate::automate_cmds::fire_event(s, "export");
+    Ok(json!({"path": path, "format": fmt, "bytes": bytes.len()}))
+}
+
+/// The flattened PNG (with transparency) that Quick Export as PNG writes for `doc`, with the
+/// metadata and colour-space choices of Export Preferences. File › Export › Send to ArtCraft
+/// hands these bytes to ArtCraft's inbox. Pure: no file system, so it works on the web too.
+pub fn quick_export_png(doc: &Document, prefs: &crate::prefs::Export) -> Result<Vec<u8>> {
+    let mut o = quick_export_options(prefs);
+    o.insert("format".into(), json!("png24"));
+    quick_export_bytes(doc, Value::Object(o), "file.export.quickExport")
+}
+
+/// The Export Preferences settings every Quick Export format shares (metadata, sRGB, transparency).
+fn quick_export_options(prefs: &crate::prefs::Export) -> serde_json::Map<String, Value> {
+    let metadata = serde_json::to_value(prefs.metadata).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    let mut o = serde_json::Map::new();
+    o.insert(
+        "metadata".into(),
+        json!(if metadata == "all" {
+            "all"
+        } else if metadata == "none" {
+            "none"
+        } else {
+            "copyright"
+        }),
+    );
+    o.insert("convertToSrgb".into(), json!(prefs.convert_to_srgb));
+    o.insert("transparency".into(), json!(true));
+    o
+}
+
+/// Flatten `doc` and encode it with the Save for Web settings `q` (PNG, GIF or JPEG).
+fn quick_export_bytes(doc: &Document, q: Value, cmd: &str) -> Result<Vec<u8>> {
     let st = WebSettings::from_params(&q, cmd)?;
-    let (wdoc, _, _) = web_document(&doc, &json!({}), &st)?;
+    let (wdoc, _, _) = web_document(doc, &json!({}), &st)?;
     let buf = photocraft_compose::flatten(&wdoc);
-    let xmp = web_xmp(&doc, st.metadata);
+    let xmp = web_xmp(doc, st.metadata);
     let opt = optimize(
         &buf.px,
         wdoc.size.width as usize,
@@ -1007,9 +1029,7 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         wdoc.resolution_dpi,
         false,
     )?;
-    write_file(&path, &opt.bytes)?;
-    crate::automate_cmds::fire_event(s, "export");
-    Ok(json!({"path": path, "format": fmt, "bytes": opt.bytes.len()}))
+    Ok(opt.bytes)
 }
 
 // ---------- Generate › Image Assets ----------

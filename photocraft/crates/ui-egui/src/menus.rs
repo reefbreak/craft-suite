@@ -39,6 +39,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("edit.freeTransform", "Free Transform", &["Edit"], Some("Cmd+T")),
     ("file.export.exportAs", "Export As…", &["File", "Export"], Some("Cmd+Alt+Shift+W")),
     ("file.export.quickExportAsPng", "Quick Export as PNG", &["File", "Export"], None),
+    // Not a Photoshop item: hands a flattened PNG to ArtCraft's inbox (`export_dialog::send_to_artcraft`).
+    ("file.export.sendToArtcraft", "Send to ArtCraft", &["File", "Export"], None),
     ("edit.transform.scale", "Scale", &["Edit", "Transform"], None),
     ("edit.transform.rotate", "Rotate", &["Edit", "Transform"], None),
     ("edit.transform.skew", "Skew", &["Edit", "Transform"], None),
@@ -392,6 +394,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         "file.export.exportAs" => Ok(json!({"dialog": crate::export_dialog::open(app)?})),
         "file.export.quickExportAsPng" => crate::export_dialog::quick_export_png(app),
+        "file.export.sendToArtcraft" => crate::export_dialog::send_to_artcraft(app),
         // Layer › Export As… / Quick Export as PNG: the export pipeline on just the active layer.
         l if matches!(l, "layer.exportAs" | "layer.quickExportAsPng") && params.as_object().is_none_or(|o| o.is_empty()) => {
             let layer = app.session.active().and_then(|d| d.active_layer).ok_or("no active layer")?;
@@ -703,6 +706,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "file.save" | "file.saveAs" | "file.export.exportAs" | "file.export.quickExportAsPng" => {
             app.session.active().is_some() && app.services.export.is_some()
         }
+        // Desktop only: the web build has no file system, so no ArtCraft inbox service.
+        "file.export.sendToArtcraft" => app.session.active().is_some() && app.services.send_to_artcraft.is_some(),
         i if i.starts_with("window.toggle.") => true,
         "window.togglePanels" => true,
         // With one document open the key stays quiet, as in Photoshop, rather than reporting why.
@@ -900,6 +905,7 @@ pub fn is_live(id: &str) -> bool {
 /// catalogue spells it differently (Filter › "Other…").
 const PLACE_AFTER: &[(&str, &str)] = &[
     ("file.newFromClipboard", "file.new"),
+    ("file.export.sendToArtcraft", "file.export.quickExportAsPng"),
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
@@ -2042,6 +2048,44 @@ mod quick_export_label_tests {
             let layer = items.iter().find(|i| i.id == "layer.quickExportAsPng").unwrap();
             assert_eq!(layer.label, "Quick Export as PNG", "layer export always creates PNG");
         }
+    }
+}
+
+#[cfg(test)]
+mod send_to_artcraft_tests {
+    use super::*;
+
+    #[test]
+    fn send_to_artcraft_follows_quick_export_and_needs_the_inbox_service() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        let items = menu_items(&app);
+        let quick = items.iter().position(|i| i.id == "file.export.quickExportAsPng").unwrap();
+        let send = &items[quick + 1];
+        assert_eq!(send.id, "file.export.sendToArtcraft");
+        assert_eq!((send.label.as_str(), send.path.clone()), ("Send to ArtCraft", vec!["File".to_string(), "Export".to_string()]));
+        assert!(!send.enabled, "no inbox service (the web build): greyed");
+        let ctx = egui::Context::default();
+        let e = invoke(&mut app, &ctx, "file.export.sendToArtcraft", json!({})).unwrap_err();
+        assert!(e.contains("ArtCraft"), "{e}");
+        assert!(app.ui.notices.last().is_some_and(|n| n.error));
+
+        // The service gets the document's name and Quick Export's PNG.
+        type Sent = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>;
+        let got: Sent = Default::default();
+        let log = got.clone();
+        app.services.send_to_artcraft = Some(Box::new(move |name: &str, png: &[u8]| {
+            log.borrow_mut().push((name.to_string(), png.to_vec()));
+            Ok(format!("/inbox/PhotoCraft - {name}.png"))
+        }));
+        assert!(menu_items(&app).iter().any(|i| i.id == "file.export.sendToArtcraft" && i.enabled));
+        let r = invoke(&mut app, &ctx, "file.export.sendToArtcraft", json!({})).unwrap();
+        let got = got.borrow();
+        let (name, png) = &got[0];
+        assert_eq!(name, &app.session.active().unwrap().doc.name);
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(r["bytes"], json!(png.len()));
+        assert!(app.ui.status.contains("ArtCraft") && !app.ui.status_error, "{}", app.ui.status);
     }
 }
 

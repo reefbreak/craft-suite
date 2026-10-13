@@ -76,6 +76,9 @@
 	Revert	Zurücksetzen
 	Export	Exportieren
 	Quick Export as PNG	Schnellexport als PNG
+	Send to ArtCraft	An ArtCraft senden
+	Sent {name} to ArtCraft	{name} an ArtCraft gesendet
+	Couldn't send to ArtCraft: {error}	Senden an ArtCraft fehlgeschlagen: {error}
 	Export As…	Exportieren als…
 	Export Preferences…	Exporteinstellungen…
 	Save for Web (Legacy)…	Für Web speichern (Legacy)…

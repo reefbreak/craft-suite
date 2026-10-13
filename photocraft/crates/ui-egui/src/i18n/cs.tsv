@@ -80,6 +80,9 @@
 	Revert	Vrátit k uložené verzi
 	Export	Export
 	Quick Export as PNG	Rychlý export do PNG
+	Send to ArtCraft	Odeslat do ArtCraft
+	Sent {name} to ArtCraft	Soubor {name} odeslán do ArtCraft
+	Couldn't send to ArtCraft: {error}	Nelze odeslat do ArtCraft: {error}
 	Export As…	Exportovat jako…
 	Export Preferences…	Předvolby exportu…
 	Save for Web (Legacy)…	Uložit pro web (starší)…

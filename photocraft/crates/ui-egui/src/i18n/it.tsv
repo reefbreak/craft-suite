@@ -73,6 +73,9 @@
 	Revert	Ripristina
 	Export	Esporta
 	Quick Export as PNG	Esportazione rapida come PNG
+	Send to ArtCraft	Invia ad ArtCraft
+	Sent {name} to ArtCraft	{name} inviato ad ArtCraft
+	Couldn't send to ArtCraft: {error}	Impossibile inviare ad ArtCraft: {error}
 	Export As…	Esporta come…
 	Export Preferences…	Preferenze di esportazione…
 	Save for Web (Legacy)…	Salva per Web (legacy)…

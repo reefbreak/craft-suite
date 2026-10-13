@@ -71,6 +71,9 @@
 	Revert	Kembalikan
 	Export	Ekspor
 	Quick Export as PNG	Ekspor Cepat ke PNG
+	Send to ArtCraft	Kirim ke ArtCraft
+	Sent {name} to ArtCraft	{name} dikirim ke ArtCraft
+	Couldn't send to ArtCraft: {error}	Tidak dapat mengirim ke ArtCraft: {error}
 	Export As…	Ekspor Sebagai…
 	Export Preferences…	Preferensi Ekspor…
 	Save for Web (Legacy)…	Simpan untuk Web (Lama)…

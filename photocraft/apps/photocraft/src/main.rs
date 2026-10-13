@@ -25,6 +25,7 @@ mod app_icon;
 mod appearance;
 #[cfg(target_os = "macos")]
 mod apple_events;
+mod artcraft_inbox;
 mod caps_lock;
 mod control_server;
 mod crash_guard;

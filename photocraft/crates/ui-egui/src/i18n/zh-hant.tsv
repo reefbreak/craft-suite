@@ -80,6 +80,9 @@
 	Revert	回復
 	Export	匯出
 	Quick Export as PNG	快速匯出為 PNG
+	Send to ArtCraft	傳送到 ArtCraft
+	Sent {name} to ArtCraft	已將 {name} 傳送到 ArtCraft
+	Couldn't send to ArtCraft: {error}	無法傳送到 ArtCraft：{error}
 	Export As…	匯出為…
 	Export Preferences…	匯出偏好設定…
 	Save for Web (Legacy)…	儲存為網頁用 (舊版)…

@@ -684,6 +684,8 @@ mod tests {
             "file.saveAs",
             "file.saveACopy",
             "file.export.saveForWebLegacy",
+            // Writes into ArtCraft's inbox outside the automation write root (docs/control-protocol.md).
+            "file.export.sendToArtcraft",
             "pattern.import",
             "layer.smartObjects.exportContents",
             "layer.smartObjects.replaceContents",
@@ -726,6 +728,7 @@ mod tests {
         assert!(session.execute("file.automate.conditionalModeChange", params).is_err());
         assert_eq!(session.active().unwrap().doc.mode, photocraft_engine::doc::ColorMode::Rgb);
         assert!(authorize_desktop_engine_step("file.saveACopy", &serde_json::json!({})).is_err());
+        assert!(authorize_desktop_engine_command("file.export.sendToArtcraft", &serde_json::json!({})).is_err());
     }
 
     #[test]

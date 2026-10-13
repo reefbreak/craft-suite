@@ -78,6 +78,9 @@
 	Revert	Revenir à la version enregistrée
 	Export	Exporter
 	Quick Export as PNG	Exportation rapide au format PNG
+	Send to ArtCraft	Envoyer vers ArtCraft
+	Sent {name} to ArtCraft	{name} envoyé vers ArtCraft
+	Couldn't send to ArtCraft: {error}	Impossible d’envoyer vers ArtCraft : {error}
 	Export As…	Exporter sous…
 	Export Preferences…	Préférences d'exportation…
 	Save for Web (Legacy)…	Enregistrer pour le Web (ancien)…

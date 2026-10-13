@@ -63,6 +63,9 @@
 	Revert	되돌리기
 	Export	내보내기
 	Quick Export as PNG	PNG로 빠르게 내보내기
+	Send to ArtCraft	ArtCraft로 보내기
+	Sent {name} to ArtCraft	{name}을(를) ArtCraft로 보냈습니다
+	Couldn't send to ArtCraft: {error}	ArtCraft로 보낼 수 없습니다: {error}
 	Export As…	다른 형식으로 내보내기…
 	Export Preferences…	내보내기 환경 설정…
 	Save for Web (Legacy)…	웹용으로 저장(기존 방식)…

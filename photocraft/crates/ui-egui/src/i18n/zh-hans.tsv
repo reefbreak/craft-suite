@@ -72,6 +72,9 @@
 	Revert	恢复
 	Export	导出
 	Quick Export as PNG	快速导出为 PNG
+	Send to ArtCraft	发送到 ArtCraft
+	Sent {name} to ArtCraft	已将 {name} 发送到 ArtCraft
+	Couldn't send to ArtCraft: {error}	无法发送到 ArtCraft：{error}
 	Export As…	导出为…
 	Export Preferences…	导出首选项…
 	Save for Web (Legacy)…	存储为 Web 所用格式（旧版）…

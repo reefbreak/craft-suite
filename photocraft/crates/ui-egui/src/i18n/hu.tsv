@@ -188,6 +188,9 @@
 	Puppet Warp	Bábtorzítás
 	Purge	Memória ürítése
 	Quick Export as PNG	Gyors exportálás PNG-be
+	Send to ArtCraft	Küldés az ArtCraftba
+	Sent {name} to ArtCraft	{name} elküldve az ArtCraftba
+	Couldn't send to ArtCraft: {error}	Nem sikerült elküldeni az ArtCraftba: {error}
 	Raw Defaults…	Raw-alapértékek…
 	Record Measurements	Mérések rögzítése
 	Redo	Újra

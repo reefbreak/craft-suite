@@ -347,6 +347,9 @@ pub struct Recoverable {
     pub path: Option<String>,
     pub load: Box<dyn FnOnce() -> Result<Document, String> + Send + 'static>,
 }
+/// File › Export › Send to ArtCraft: deliver a finished PNG (document name, bytes) to ArtCraft's
+/// inbox folder and return the path of the file written. Desktop only; `None` on the web.
+pub type SendToArtcraftFn = Box<dyn FnMut(&str, &[u8]) -> Result<String, String>>;
 /// Append text to a file (History Log).
 pub type AppendTextFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 /// Requests from the operating system since the last call (see [`OsEvent`]).
@@ -379,6 +382,8 @@ pub struct Services {
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
+    /// File › Export › Send to ArtCraft (desktop): writes into ArtCraft's fixed inbox folder.
+    pub send_to_artcraft: Option<SendToArtcraftFn>,
     /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
     /// window (#2017). With background jobs on, saves use it instead of `export` and `write`.
     pub save_file: Option<SaveFileFn>,

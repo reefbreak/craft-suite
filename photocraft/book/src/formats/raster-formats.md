@@ -20,6 +20,16 @@ Every route that writes a document to a flat format (Save As, the CLI, MCP `doc_
 - Formats that can't embed an ICC profile (GIF, BMP, TGA, QOI, ICO, Netpbm/PFM) get RGB documents in another profile (linear light, Display P3, …) converted to sRGB through the colour engine (perceptual intent), since an untagged file is read as sRGB. OpenEXR and Radiance HDR get linear sRGB instead (linear gray for a grayscale OpenEXR), which is how they are tagged when opened.
 - TGA, as Photoshop's Targa: an RGB Targa is 24 or 32 bits per pixel. Save As and Save a Copy ask (Targa Options, starting at 32 with an alpha channel, else 24); Export As has a Resolution choice (Auto, 24 or 32 bits/pixel); scripts pass `tgaBits` (`--tga-bits` on the CLI). At 32 bits the document's alpha channel is the file's alpha when it has exactly one (spot channels don't count; with several, none is used), and the colours are written exactly, never premultiplied or cleared where the alpha is 0, so a game texture's mask and its colours both survive. Without a usable alpha channel the layers' transparency is the alpha (opaque without any). 24 bits write no alpha, compositing transparency over white. Without a choice: 32 with an alpha channel or transparency, else 24. A 32-bit Targa opens as an opaque Background with its alpha as "Alpha 1", so it round-trips. Grayscale Targas are 8-bit.
 
+## Send to ArtCraft
+
+File › Export › Send to ArtCraft (`file.export.sendToArtcraft`, right after Quick Export as PNG) hands the active document to the ArtCraft app. It writes the same bytes as Quick Export as PNG (flattened, with transparency, honouring Export Preferences' metadata and Convert to sRGB) into ArtCraft's inbox, `<home>/Artcraft/inbox` (`HOME`, or `USERPROFILE` on Windows), creating the folder when missing. ArtCraft polls that folder, imports every complete file and moves it away, so the hand-off follows its rules:
+
+- The file is named `PhotoCraft - <document name>.png` (the document's extension dropped, characters file systems reject replaced by `_`), so ArtCraft can say where it came from.
+- It appears atomically: the bytes go to a hidden `.part` file in the inbox (ArtCraft skips hidden names and `.part`/`.tmp` files), are flushed to disk, and only then get the final name, by a hard link that can't replace a file (a checked rename where the file system has no hard links). A failed send leaves no partial file.
+- An existing file is never overwritten: the name gains ` 2`, ` 3`, … (`PhotoCraft - cat 2.png`).
+
+The status bar reports the file sent; a failure is shown there and as a notice. The command is desktop-only (greyed in the web build, which has no file system) and is refused over the control channel and MCP, like the other `file.*` commands that write outside the automation roots (see `docs/control-protocol.md` › Engine commands). The writer is `apps/photocraft/src/artcraft_inbox.rs`.
+
 ## Implemented decode limits
 
 `DecodeOptions::default()` applies `Limits` before decoded pixel allocation:

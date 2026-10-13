@@ -57,6 +57,9 @@
 	Revert	Επαναφορά αποθηκευμένης έκδοσης
 	Export	Εξαγωγή
 	Quick Export as PNG	Γρήγορη εξαγωγή σε PNG
+	Send to ArtCraft	Αποστολή στο ArtCraft
+	Sent {name} to ArtCraft	Το {name} στάλθηκε στο ArtCraft
+	Couldn't send to ArtCraft: {error}	Δεν ήταν δυνατή η αποστολή στο ArtCraft: {error}
 	Export As…	Εξαγωγή ως…
 	Export Preferences…	Προτιμήσεις εξαγωγής…
 	Save for Web (Legacy)…	Αποθήκευση για ιστό (παλαιού τύπου)…
