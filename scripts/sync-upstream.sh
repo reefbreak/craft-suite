@@ -16,6 +16,9 @@ declare -A SOURCES=(
   [printcraft]="https://github.com/storytold/pdfcraft main"
   [effectcraft]="https://github.com/storytold/effectcraft main"
   [designcraft]="https://github.com/storytold/designcraft main"
+  [deckcraft]="https://github.com/storytold/deckcraft main"
+  [gridcraft]="https://github.com/storytold/gridcraft main"
+  [cadcraft]="https://github.com/storytold/cadcraft main"
   [craft-launcher]="https://github.com/storytold/craft-launcher main"
 )
 
@@ -25,7 +28,7 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 apps=("$@")
-[ ${#apps[@]} -eq 0 ] && apps=(artcraft filmcraft photocraft vectorcraft lightcraft printcraft effectcraft designcraft craft-launcher)
+[ ${#apps[@]} -eq 0 ] && apps=(artcraft filmcraft photocraft vectorcraft lightcraft printcraft effectcraft designcraft deckcraft gridcraft cadcraft craft-launcher)
 for app in "${apps[@]}"; do
   read -r url branch <<< "${SOURCES[$app]:?unknown app: $app}"
   echo "== $app <- $url $branch"

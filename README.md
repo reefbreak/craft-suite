@@ -15,6 +15,9 @@ docs, and can be updated from its upstream.
 | `lightcraft`     | LightCraft     | `lightcraft`        | photo catalog and grading                         |
 | `vectorcraft`    | VectorCraft    | `vectorcraft`       | vector illustration                               |
 | `designcraft`    | DesignCraft    | `designcraft`       | page layout                                       |
+| `deckcraft`      | DeckCraft      | `deckcraft`         | presentations                                     |
+| `gridcraft`      | GridCraft      | `gridcraft`         | spreadsheets                                      |
+| `cadcraft`       | CADCraft       | `cadcraft`          | CAD and drafting                                  |
 | `printcraft`     | PrintCraft     | `pdfcraft`          | PDF editor                                        |
 | `craft-launcher` | Craft Launcher | `artcraft-launcher` | launcher for the apps                             |
 
@@ -27,7 +30,7 @@ cd artcraft    && cargo build --release -p artcraft_native
 cd filmcraft   && cargo build --release -p filmcraft
 cd photocraft  && cargo build --release -p photocraft
 cd printcraft  && cargo build --release -p pdfcraft
-# …and likewise effectcraft, lightcraft, vectorcraft, designcraft
+# …and likewise effectcraft, lightcraft, vectorcraft, designcraft, deckcraft, gridcraft, cadcraft
 ```
 
 Each app's own README lists its system requirements (FFmpeg for FilmCraft and EffectCraft,
@@ -38,19 +41,22 @@ cmake for ArtCraft, and so on). ArtCraft's local-mode setup is in
 
 **ArtCraft → apps.** In ArtCraft's lightbox, the **Craft apps** row sends the item to:
 
-| App         | Takes               | What happens                   |
-|-------------|---------------------|--------------------------------|
-| FilmCraft   | image, video, audio | imported into the open project |
-| EffectCraft | image, video, audio | imported into the open project |
-| PhotoCraft  | image               | opened as a document           |
-| LightCraft  | image               | added to the catalog           |
-| VectorCraft | image               | placed in the open document    |
-| DesignCraft | image               | placed in the open layout      |
-| PrintCraft  | image               | made into a PDF                |
+| App         | Takes               | What happens                               |
+|-------------|---------------------|--------------------------------------------|
+| FilmCraft   | image, video, audio | imported into the open project             |
+| EffectCraft | image, video, audio | imported into the open project             |
+| PhotoCraft  | image               | opened as a document                       |
+| LightCraft  | image               | added to the catalog                       |
+| VectorCraft | image               | placed in the open document                |
+| DesignCraft | image               | placed in the open layout                  |
+| DeckCraft   | image               | inserted on the current slide              |
+| GridCraft   | image               | inserted as a picture in the open workbook |
+| PrintCraft  | image               | made into a PDF                            |
 
 ArtCraft starts the app if it isn't running (finding the build in this checkout by its own
 location, or `CRAFT_SUITE_DIR`, `/Applications`, or `PATH`) and talks to it over a loopback
-control port after that.
+control port after that. CADCraft has no button yet: it can't attach images (IMAGEATTACH
+is on its upstream gaps list).
 
 **Apps → ArtCraft.** FilmCraft (File › Send to ArtCraft › Current Frame / Active Sequence) and
 PhotoCraft (File › Export › Send to ArtCraft) write into `~/Artcraft/inbox/`. ArtCraft picks new
