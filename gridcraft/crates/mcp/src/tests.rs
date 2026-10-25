@@ -202,6 +202,9 @@ fn basic_tools() {
     assert!(f.as_array().unwrap().iter().any(|x| x["name"] == "VLOOKUP"));
     assert_eq!(ok(&mut s, "evaluate_formula", json!({"formula": "SUM(1,2,3)"}))["result"], json!(6.0));
     ok(&mut s, "set_cell", json!({"cell": "A1", "input": "5"}));
+    // #697: a number for `input` is entered, not rejected or cleared.
+    ok(&mut s, "set_cell", json!({"cell": "B1", "input": 42.5}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B1"}))["value"], json!(42.5));
     ok(&mut s, "execute_command", json!({"command": "cell.set", "params": {"cell": "A2", "input": "=A1*2"}}));
     assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A2"}))["value"], json!(10.0));
     assert_eq!(ok(&mut s, "evaluate_formula", json!({"formula": "=A1+A2", "cell": "C1"}))["result"], json!(15.0));
@@ -363,6 +366,11 @@ fn remote_backend_over_tcp() {
             let stream = stream.unwrap();
             let mut w = stream.try_clone().unwrap();
             let mut r = BufReader::new(stream);
+            // Every connection starts with the token, as the app requires.
+            let mut first = String::new();
+            r.read_line(&mut first).unwrap();
+            let hello = crate::control_auth::check_first_line(&first, "secret-token-0123456789").unwrap();
+            w.write_all(format!("{hello}\n").as_bytes()).unwrap();
             loop {
                 let mut line = String::new();
                 if r.read_line(&mut line).unwrap_or(0) == 0 {
@@ -382,7 +390,7 @@ fn remote_backend_over_tcp() {
     });
     let addr = control_addr(&port.to_string());
     assert_eq!(addr, format!("127.0.0.1:{port}"));
-    let mut s = Server::new(Box::new(Remote::connect(&addr).unwrap()));
+    let mut s = Server::new(Box::new(Remote::connect_with_token(&addr, "secret-token-0123456789".into()).unwrap()));
     assert_eq!(ok(&mut s, "evaluate_formula", json!({"formula": "=1+1"}))["result"], json!(2.0));
     // Second call reconnects transparently.
     ok(&mut s, "set_cell", json!({"cell": "A1", "input": "7"}));
@@ -391,7 +399,49 @@ fn remote_backend_over_tcp() {
     assert!(msg.contains("unknown command"), "{msg}");
     drop(s);
     handle.join().unwrap();
-    assert!(Remote::connect("127.0.0.1:1").is_err());
+    assert!(Remote::connect_with_token("127.0.0.1:1", "x".into()).is_err());
+}
+
+#[test]
+fn control_auth_handshake_and_compare() {
+    use crate::control_auth::{auth_line, check_first_line, constant_time_eq, hex};
+    let token = "0123456789abcdef0123456789abcdef";
+    let ok = check_first_line(&auth_line(7, token), token).unwrap();
+    assert_eq!((ok["id"].clone(), ok["ok"].clone()), (json!(7), json!(true)));
+    // Wrong or missing token, another method, and non-JSON are all refused the same way.
+    let wrong = check_first_line(&auth_line(1, "0123456789abcdef0123456789abcdee"), token).unwrap_err();
+    for bad in [
+        auth_line(1, ""),
+        r#"{"id":1,"method":"auth","params":{}}"#.into(),
+        r#"{"id":1,"method":"app.save","params":{"path":"/tmp/x","token":"0123456789abcdef0123456789abcdef"}}"#.into(),
+        "POST / HTTP/1.1".into(),
+        String::new(),
+    ] {
+        assert_eq!(check_first_line(&bad, token).unwrap_err(), wrong, "{bad}");
+    }
+    // An empty configured token never matches an empty given one.
+    assert!(check_first_line(&auth_line(1, ""), "").is_err());
+    assert!(constant_time_eq(b"abc", b"abc"));
+    assert!(!constant_time_eq(b"abc", b"abd"));
+    assert!(!constant_time_eq(b"abc", b"abcd"));
+    assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
+}
+
+#[cfg(unix)]
+#[test]
+fn control_token_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    // Unique port per run so parallel tests don't share a file; the folder is the real one.
+    let port = 40_000 + (std::process::id() % 20_000) as u16;
+    let path = crate::control_auth::write_token_file(port, "tok-0123456789abcdef").unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+    // A looser leftover is replaced, not reused.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+    crate::control_auth::write_token_file(port, "tok-1123456789abcdef").unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), "tok-1123456789abcdef");
+    std::fs::remove_file(&path).unwrap();
 }
 
 #[test]
@@ -463,7 +513,6 @@ fn other_sheet_prefix_is_error() {
     ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": 0}}));
     fails(&mut s, "set_cell", json!({"cell": "Nope!B2", "input": "x"}));
     // A command that cannot honour a sheet prefix must not drop it and use the active sheet.
-    cmd_fails(&mut s, "view.freezePanes", json!({"cell": "Other!B2"}));
     cmd_fails(&mut s, "formulas.tracePrecedents", json!({"cell": "Other!B2"}));
     ok(&mut s, "set_cell", json!({"cell": "Sheet1!B2", "input": "here"}));
     assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B2"}))["text"], "here");
@@ -495,7 +544,10 @@ fn cross_sheet_cell_refs_resolve() {
     // The active sheet may be a quoted name with spaces.
     ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": "My Sheet"}}));
     ok(&mut s, "execute_command", json!({"command": "view.freezePanes", "params": {"cell": "'My Sheet'!B2"}}));
-    cmd_fails(&mut s, "view.freezePanes", json!({"cell": "Other!B2"}));
+    // Freeze Panes honours another sheet's prefix (or `sheet`) and leaves the active sheet alone.
+    ok(&mut s, "execute_command", json!({"command": "view.freezePanes", "params": {"cell": "Other!C4"}}));
+    let sheets = ok(&mut s, "inspect_workbook", json!({}))["sheets"].clone();
+    assert_eq!((sheets[1]["freeze"].clone(), sheets[2]["freeze"].clone()), (json!([3, 2]), json!([1, 1])), "{sheets}");
     // A prefix naming a different sheet than the `sheet` argument is an error, not resolved in favour of either.
     cmd_fails(&mut s, "cell.get", json!({"cell": "Other!B3", "sheet": "Sheet1"}));
 }
@@ -516,4 +568,30 @@ fn text_to_columns_destination_follows_its_sheet() {
     // An unparsable destination and a prefix that contradicts the command's sheet are errors, not A1.
     cmd_fails(&mut s, "data.textToColumns", json!({"range": "Other!A1", "delimiters": [","], "destination": "D0"}));
     cmd_fails(&mut s, "data.textToColumns", json!({"range": "Other!A1", "delimiters": [","], "destination": "Sheet1!D1"}));
+}
+
+#[test]
+fn invalid_borders_are_invalid_params() {
+    let mut s = server();
+    let bad = |s: &mut Server, id: u64, borders: Value| {
+        let v = rpc(s, id, "tools/call", json!({"name": "format_range", "arguments": {"range": "A1", "borders": borders}}));
+        assert_eq!(err_code(&v), -32602, "{v}");
+    };
+    bad(&mut s, 1, json!(123));
+    bad(&mut s, 2, json!("bogus"));
+    bad(&mut s, 3, json!({"preset": "bogus"}));
+    bad(&mut s, 4, json!({"style": "thick"}));
+    ok(&mut s, "format_range", json!({"range": "A1", "borders": "all"}));
+    ok(&mut s, "format_range", json!({"range": "B1", "borders": {"preset": "all", "style": "thick", "color": "#123456"}}));
+}
+
+#[test]
+fn invalid_sort_keys_are_invalid_params() {
+    let mut s = server();
+    ok(&mut s, "write_range", json!({"range": "A1", "values": [["b"], ["c"], ["a"]]}));
+    for (id, keys) in [(1, json!([123])), (2, json!([{"order": "desc"}])), (3, json!([{"column": "A", "order": "sideways"}]))] {
+        let v = rpc(&mut s, id, "tools/call", json!({"name": "sort_range", "arguments": {"range": "A1:A3", "keys": keys}}));
+        assert_eq!(err_code(&v), -32602, "{v}");
+    }
+    ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": ["A", {"column": "A", "order": "desc"}]}));
 }
