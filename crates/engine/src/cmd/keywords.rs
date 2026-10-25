@@ -32,6 +32,12 @@ fn commit_keywords(s: &mut Session, label: &str, op: lightcraft_catalog::Op, fol
     if let Some(k) = s.filter.keyword.clone() {
         s.filter.keyword = follow(&k);
     }
+    // a filter put aside by Enable Filters follows the keyword too
+    if let Some(f) = s.shelved_filter.as_mut()
+        && let Some(k) = f.keyword.clone()
+    {
+        f.keyword = follow(&k);
+    }
     Ok(json!({"changed": photos, "listed": listed}))
 }
 
@@ -148,6 +154,16 @@ pub fn keyword_sets_json(s: &Session) -> Value {
     json!({"sets": sets, "current": s.keyword_set.clone().unwrap_or_else(|| RECENT.into()), "keywords": current_keywords(s)})
 }
 
+/// Make the set `step` places after the current one current, in the Keyword Set menu's order
+/// (Recent Keywords, then the saved sets), wrapping around from the last to the first and back.
+fn step_set(s: &mut Session, step: isize) -> Result<Value> {
+    let at = s.keyword_set.as_deref().and_then(|n| s.keyword_sets.iter().position(|x| same_set(&x.name, n))).map_or(0, |i| i + 1);
+    let next = (at as isize + step).rem_euclid(s.keyword_sets.len() as isize + 1) as usize;
+    s.keyword_set = next.checked_sub(1).and_then(|i| s.keyword_sets.get(i)).map(|x| x.name.clone());
+    s.save_prefs()?;
+    Ok(keyword_sets_json(s))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "keyword.sets", "Keyword Sets", [], None, "{} → {sets: [{name, keywords}], current, keywords: the nine ⌥1–⌥9 apply}", always, |s, _| Ok(keyword_sets_json(s))),
@@ -168,6 +184,24 @@ pub fn specs() -> Vec<CommandSpec> {
             s.save_prefs()?;
             Ok(keyword_sets_json(s))
         }),
+        cmd!(
+            "keyword.nextSet",
+            "Next Keyword Set",
+            [],
+            Some("Alt+0"),
+            "{}: the set after the current one (after the last, Recent Keywords)",
+            always,
+            |s, _| step_set(s, 1)
+        ),
+        cmd!(
+            "keyword.previousSet",
+            "Previous Keyword Set",
+            [],
+            Some("Alt+Shift+0"),
+            "{}: the set before the current one (before Recent Keywords, the last)",
+            always,
+            |s, _| step_set(s, -1)
+        ),
         cmd!(
             "keyword.saveSet",
             "Save Keyword Set",
@@ -256,7 +290,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let Some(k) = current_keywords(s).get(i as usize - 1).cloned().filter(|k| !k.is_empty()) else {
                     return Ok(json!({"changed": 0}));
                 };
-                let ids = s.targets(p);
+                let ids = s.targets(p)?;
                 let all = !ids.is_empty()
                     && ids.iter().all(|id| {
                         s.catalog
@@ -288,7 +322,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             |s, p| {
                 let mut current: Vec<String> = Vec::new();
-                for id in s.targets(p) {
+                for id in s.targets(p)? {
                     if let Some(ph) = s.catalog.photo(id) {
                         current.extend(ph.meta.keywords.iter().cloned());
                     }
@@ -336,7 +370,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(parent) => format!("{parent}|{name}"),
                     None => name,
                 });
-                let photos = if bool_or(p, "addToSelected", false) { s.targets(p) } else { Vec::new() };
+                let photos = if bool_or(p, "addToSelected", false) { s.targets(p)? } else { Vec::new() };
                 let op = s
                     .catalog
                     .create_keyword_ops(&path, info_from(p, KeywordInfo::default()), &photos)
@@ -445,7 +479,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut r = json!({"keywords": file.written.len(), "captureOneRefuses": refuses, "unwritable": file.unwritable});
                 match str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
                     Some(path) => {
-                        std::fs::write(path, &file.text).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
+                        s.check_write_target(path).map_err(|e| bad("keyword.export", e))?;
+                        // A folder that isn't there is an error, not created.
+                        lightcraft_catalog::safe_file::write_atomic(std::path::Path::new(path), file.text.as_bytes())
+                            .map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
                         r["path"] = json!(path);
                     }
                     None => r["text"] = json!(file.text),

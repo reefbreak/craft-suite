@@ -1,7 +1,7 @@
 //! AI denoise through the engine: installing a model, making a photo's denoised picture in the background and for an
 //! export, the Amount slider mixing it in, and the cache. A tiny stand-in model (it halves every sample) takes the
 //! place of a real one, which is enough to see what the machinery does with its answer; how well real models denoise is
-//! measured separately (`crates/denoise/tests/real_model.rs`).
+//! measured separately (`crates/denoise/tests/it/real_model.rs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -275,6 +275,29 @@ fn a_manifest_that_does_not_validate_or_name_the_file_is_refused() {
     std::fs::write(&json_path, b"{ not json").unwrap();
     assert!(x.s.execute("denoise.models.install", &json!({"path": onnx.to_string_lossy(), "acknowledged": true})).is_err());
     let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+/// Another app's model folder (#1381): an `.onnx` with no manifest, then with that app's `model.json` beside it, then
+/// with the `model.json` renamed. Each refusal says what is wrong and where LightCraft's manifest is described.
+#[test]
+fn inspecting_another_apps_model_folder_says_what_is_missing() {
+    let dir = temp_dir("denoise-foreign");
+    let mut s = Session::new().with_fs();
+    s.set_denoise_models_dir(Some(dir.join("denoise-models")));
+    let src = dir.join("rawdenoise");
+    std::fs::create_dir_all(&src).unwrap();
+    let onnx = src.join("rawdenoise.onnx");
+    std::fs::write(&onnx, b"not an onnx file").unwrap();
+    let mut inspect = || s.execute("denoise.models.inspect", &json!({"path": onnx.to_string_lossy()})).unwrap_err().to_string();
+    let e = inspect();
+    assert!(e.contains("No denoise-model.json beside") && e.contains("docs/denoise.md") && !e.contains("model.json there"), "{e}");
+    std::fs::write(src.join("model.json"), json!({"name": "rawdenoise", "input": {"channels": 4}, "scale": 2}).to_string()).unwrap();
+    let e = inspect();
+    assert!(e.contains("No denoise-model.json beside") && e.contains("The model.json there") && e.contains("docs/denoise.md"), "{e}");
+    std::fs::rename(src.join("model.json"), src.join("denoise-model.json")).unwrap();
+    let e = inspect();
+    assert!(e.contains("not a denoise-model manifest") && e.contains("docs/denoise.md"), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -682,6 +705,7 @@ fn a_photo_whose_file_changed_has_no_picture_until_it_is_made_again() {
             file_size: p.file_size + 1,
             content_hash: Some("ffffffffffffffffffffffffffffffff".into()),
             preview_only: None,
+            preview_checked: String::new(),
         },
     )
     .unwrap();

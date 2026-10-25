@@ -303,9 +303,20 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
     if !src.extension().is_some_and(|e| e.eq_ignore_ascii_case("onnx")) {
         return Err(bad(C, "choose an .onnx file with denoise-model.json beside it"));
     }
-    let bytes = read_capped(&src.with_file_name("denoise-model.json"), MAX_MANIFEST_BYTES)
-        .ok_or_else(|| bad(C, "denoise-model.json is missing or too large"))?;
-    let m = manifest::parse(&bytes).map_err(|e| bad(C, e.to_string()))?;
+    let sibling = src.with_file_name("denoise-model.json");
+    let Some(bytes) = read_capped(&sibling, MAX_MANIFEST_BYTES) else {
+        let why = if sibling.is_file() {
+            "denoise-model.json could not be read or is too large"
+        } else if src.with_file_name("model.json").is_file() {
+            // other apps ship their models with a model.json of their own (#1381)
+            "No denoise-model.json beside this .onnx file. The model.json there is another app's description, which LightCraft \
+             does not read: it needs its own denoise-model.json (see docs/denoise.md)"
+        } else {
+            "No denoise-model.json beside this .onnx file: LightCraft needs one that says how to use the model (see docs/denoise.md)"
+        };
+        return Err(bad(C, why));
+    };
+    let m = manifest::parse(&bytes).map_err(|e| bad(C, format!("denoise-model.json: {e} (see docs/denoise.md)")))?;
     let dir = models_dir(s, C)?;
     Ok(json!({"kind": "model", "domain": "denoise", "path": path, "fileName": src.file_name().map(|n| n.to_string_lossy()), "model": m,
         "sizeBytes": std::fs::metadata(src).ok().map(|m| m.len()), "alreadyInstalled": dir.join(&m.id).join("model.onnx").is_file()}))
@@ -502,10 +513,6 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"auto": st.auto(), "cacheGb": st.cache_bytes() >> 30, "threads": st.threads, "runOn": st.run_on().name()}))
 }
 
-fn ids_param(p: &Value) -> Option<Vec<PhotoId>> {
-    p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect())
-}
-
 fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {
     let (files, bytes) = s.denoise_cache_usage();
     let st = &s.denoise.settings;
@@ -583,7 +590,7 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
     if s.denoise_products_dir().is_none() {
         return Err(bad(C, "denoise keeps its pictures in the library's folder: open a library on disk first"));
     }
-    let ids = match ids_param(p) {
+    let ids = match super::photo_ids(p, C)? {
         Some(ids) => ids,
         None => match str_param(p, "scope").unwrap_or("selected") {
             "selected" => s.selection.active.iter().chain(s.selection.ids.iter()).copied().collect(),
@@ -601,14 +608,14 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn cancel(s: &mut Session, p: &Value) -> Result<Value> {
-    let photo = p.get("id").and_then(Value::as_u64).map(PhotoId);
+    let photo = super::photo_id(p, "denoise.cancel")?;
     let n = s.denoise_cancel(photo, bool_or(p, "all", photo.is_none()));
     Ok(json!({"cancelled": n}))
 }
 
 fn status(s: &mut Session, p: &Value) -> Result<Value> {
     s.denoise_refresh_active(false);
-    Ok(status_json(s, p.get("id").and_then(Value::as_u64).map(PhotoId)))
+    Ok(status_json(s, super::photo_id(p, "denoise.status")?))
 }
 
 /// `denoise.pump {pace?}`: cheap to call every frame. Takes in what the background job has finished and keeps one going.

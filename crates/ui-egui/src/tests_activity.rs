@@ -9,7 +9,8 @@ use crate::headless::Headless;
 use crate::panels::activity::{WIDTH, count_text};
 use crate::{LightcraftApp, Services};
 
-const T: Duration = Duration::from_secs(20);
+// generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
+const T: Duration = Duration::from_secs(60);
 
 fn demo() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
@@ -77,7 +78,7 @@ fn more_than_three_rows_overflow_and_expand() {
     click(&mut h, "activity:more");
     assert_eq!(rows(&h), 5);
     // expanded, the stack grows to show them all
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::new("activity-stack"))).expect("the stack is drawn");
+    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::unique("activity-stack"))).expect("the stack is drawn");
     for g in &guards {
         let r = rect(&h, &format!("activity:row:{}", g.id()));
         assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
@@ -241,6 +242,14 @@ fn dead_export_worker_leaves_no_row() {
 
 /// A folder of `n` stand-in JPEGs and an app whose file probe takes 100 ms each (a slow drive).
 fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
+    gated_import(tag, n, None)
+}
+
+/// Like `slow_import`, and while `gate` is false the probe holds every file after the first batch
+/// (`batch_size()` files, which join the catalog together), so a test can act mid-import without
+/// racing the 100 ms-per-file clock. The hold gives up after 60 s, so a failed test never leaves
+/// the import thread spinning.
+fn gated_import(tag: &str, n: usize, gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> (Headless, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("lc-activity-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -248,8 +257,17 @@ fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
         std::fs::write(dir.join(format!("IMG_{i:03}.jpg")), format!("not really a jpeg {i}")).unwrap();
     }
     let mut s = lightcraft_engine::Session::new();
-    s.media.file_probe = Some(std::sync::Arc::new(|p: &str| {
+    s.media.file_probe = Some(std::sync::Arc::new(move |p: &str| {
         std::thread::sleep(Duration::from_millis(100));
+        let index = p.rsplit_once("IMG_").and_then(|(_, n)| n.strip_suffix(".jpg")).and_then(|n| n.parse::<usize>().ok());
+        if let (Some(gate), Some(index)) = (&gate, index)
+            && index >= lightcraft_engine::import::batch_size()
+        {
+            let t0 = std::time::Instant::now();
+            while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < Duration::from_secs(60) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         Ok(lightcraft_engine::media::ProbeInfo {
             width: 60,
             height: 40,
@@ -278,6 +296,27 @@ fn import_cancelled_by_command_reports_cancelled() {
     assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Import cancelled")), "{:?}", h.app.ui.toast);
     assert!(h.app.session.catalog.len() < n, "stopped part-way");
     assert_eq!(h.app.session.undo.len(), undo0 + 1, "one undo step");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A photo chosen while an import runs stays the active one when the import ends: the import
+/// selects its first photo only if nobody picked something else meanwhile (issue #1446).
+#[test]
+fn a_photo_chosen_during_an_import_stays_selected() {
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut h, dir) = gated_import("chosen", 20, Some(gate.clone()));
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.as_ref().is_some_and(|t| t.imported >= 2)));
+    // the newest photo so far, never the import's first
+    let chosen = h.app.session.catalog.photos().map(|p| p.id).max().expect("photos arrived");
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [chosen.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // held at the gate until now, so the import cannot have ended however slowly the frames ran
+    assert!(h.app.import.is_some(), "still importing");
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.is_none()));
+    assert_eq!(h.app.session.catalog.len(), 20, "all imported");
+    assert_eq!(h.app.session.selection.active, Some(chosen));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -342,6 +381,84 @@ fn final_merge_shows_a_row_and_cancels() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The merge dialog opens with the options of the last merge of its kind (per kind), and "with Last
+/// Settings" uses them; a kind never merged opens with the defaults.
+#[test]
+fn merge_dialog_remembers_the_last_settings_per_kind() {
+    let (mut h, dir) = bracket("merge-last");
+    let opts = crate::merge::MergeDialog {
+        align: false,
+        deghost: "high".into(),
+        auto_settings: false,
+        ..crate::merge::MergeDialog::for_command("merge.hdr")
+    };
+    crate::merge::open(&mut h.app, "merge.hdr").unwrap();
+    h.app.ui.dialog = None;
+    crate::merge::start_final(&mut h.app, &opts).unwrap();
+    let row = h.app.session.activity.list()[0].id;
+    h.app.session.activity.cancel(row).unwrap();
+    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+    crate::merge::open(&mut h.app, "merge.hdr").unwrap();
+    let Some(crate::state::Dialog::Merge { opts: shown }) = &h.app.ui.dialog else { panic!("no merge dialog") };
+    assert_eq!(shown, &opts);
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    let Some(crate::state::Dialog::Merge { opts: shown }) = &h.app.ui.dialog else { panic!("no merge dialog") };
+    assert_eq!(shown, &crate::merge::MergeDialog::for_command("merge.panorama"));
+    h.app.ui.dialog = None;
+    // older or hand-edited preferences: missing fields take their defaults, junk is ignored
+    h.app.session.last_merge.insert("merge.panorama".into(), json!({"projection": "cylindrical", "command": "merge.hdr"}));
+    h.app.session.last_merge.insert("merge.hdrPanorama".into(), json!("junk"));
+    let pano = crate::merge::last_options(&h.app, "merge.panorama");
+    assert_eq!((pano.command.as_str(), pano.projection.as_str(), pano.auto_crop), ("merge.panorama", "cylindrical", true));
+    assert_eq!(crate::merge::last_options(&h.app, "merge.hdrPanorama"), crate::merge::MergeDialog::for_command("merge.hdrPanorama"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// HDR for Each Bracket Set runs the merges one after the other, each with its activity row; cancelling one stops the
+/// rest.
+#[test]
+fn batch_merge_runs_each_set_in_turn() {
+    let dir = std::env::temp_dir().join(format!("lc-activity-batch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut paths = Vec::new();
+    // different exposures, or the import would take set B for duplicates of set A
+    for (set, evs) in [("A", [-2.0, 0.0, 2.0]), ("B", [-1.5, 0.5, 2.5]), ("C", [-1.0, 1.0, 3.0])] {
+        for (i, bytes) in lightcraft_merge::synth::bracket_dngs(1600, 1200, &evs).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("{set}_{i}.dng"));
+            std::fs::write(&p, bytes).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    let r = session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    assert_eq!(ids.len(), 9);
+    for set in ids.chunks(3) {
+        session.execute("stack.group", &json!({"ids": set})).unwrap();
+    }
+    session.execute("library.select", &json!({"ids": ids})).unwrap();
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(T);
+    let r = crate::menus::run_ui_command(&mut h.app, "merge.hdrBatch", &json!({})).unwrap().unwrap();
+    assert_eq!(r["sets"], 3);
+    assert_eq!(h.app.merge.batch.len(), 2, "one running, two queued");
+    let rows = h.app.session.activity.list();
+    assert_eq!((rows.len(), rows.first().map(|r| r.kind)), (1, Some("merge")));
+    // the first merge finishes and the second starts by itself
+    assert!(h.step_until(T, |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
+    assert_eq!(h.app.session.catalog.len(), 10);
+    // cancelling the second drops the third
+    let rows = h.app.session.activity.list();
+    h.app.session.activity.cancel(rows[0].id).unwrap();
+    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+    assert!(h.app.merge.batch.is_empty());
+    assert_eq!(h.app.session.catalog.len(), 10, "nothing more merged");
+    assert!(h.app.session.activity.list().is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn find_missing_shows_an_indeterminate_row() {
     let mut h = demo();
@@ -387,7 +504,7 @@ fn rows_added_later_grow_the_stack() {
     for _ in 0..5 {
         h.step();
     }
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::new("activity-stack"))).expect("the stack is drawn");
+    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::unique("activity-stack"))).expect("the stack is drawn");
     for g in [&a, &b, &c] {
         let r = rect(&h, &format!("activity:row:{}", g.id()));
         assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
@@ -398,7 +515,7 @@ fn rows_added_later_grow_the_stack() {
 fn immediate_library_commands_and_auto_sync_show_completion() {
     let mut h = demo();
     assert!(h.app.run("library.clearPreviews", json!({})).is_ok());
-    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("✓ Clear Preview Cache"));
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("✓ Discard Preview Cache"));
 
     assert_eq!(h.app.run("develop.autoSync", json!({"on": true})).unwrap()["on"], true);
     assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Auto Sync: On"));

@@ -5,6 +5,7 @@
 #   $DIST/lightcraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
+# Fonts: use CRAFT_FONTS_DIR or ../craft-fonts; download the pinned checkout if absent.
 #
 # Signing (env):
 #   MACOS_SIGN_IDENTITY   codesign identity (name or SHA-1). Default "-" = ad-hoc (local testing;
@@ -19,7 +20,7 @@ HERE="$ROOT/packaging/macos"
 
 ARCH=universal
 SKIP_BUILD=0
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
@@ -44,9 +45,9 @@ DMG="$DIST/lightcraft-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/lightcraft-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
-if [ "$IDENTITY" = "-" ]; then
+if [[ "$IDENTITY" = "-" ]]; then
   warn "macOS: ad-hoc signing (no MACOS_SIGN_IDENTITY); artifacts are not notarized"
-elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+elif [[ -n "${APPLE_ID:-}" ]] && [[ -n "${APPLE_PASSWORD:-}" ]] && [[ -n "${APPLE_TEAM_ID:-}" ]]; then
   NOTARIZE=1
 else
   warn "macOS: APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID incomplete; signed but not notarized"
@@ -55,7 +56,10 @@ fi
 echo "==> LightCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
-if [ "$SKIP_BUILD" = 0 ]; then
+if [[ "$SKIP_BUILD" = 0 ]]; then
+  # shellcheck source=../fonts.sh
+  . "$ROOT/packaging/fonts.sh"
+  prepare_fonts
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
   (cd "$ROOT" && cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif "${args[@]}")
@@ -74,9 +78,9 @@ done
 sign() {
   # Hardened runtime + secure timestamp for a real identity; ad-hoc can't be timestamped.
   local ts=(--timestamp)
-  [ "$IDENTITY" = "-" ] && ts=(--timestamp=none)
+  [[ "$IDENTITY" = "-" ]] && ts=(--timestamp=none)
   local kc=()
-  [ -n "${MACOS_KEYCHAIN:-}" ] && kc=(--keychain "$MACOS_KEYCHAIN")
+  [[ -n "${MACOS_KEYCHAIN:-}" ]] && kc=(--keychain "$MACOS_KEYCHAIN")
   codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} "${ts[@]}" "$@"
 }
 
@@ -88,8 +92,8 @@ notarize() {
   echo "$out"
   id="$(printf '%s' "$out" | plutil -extract id raw -o - - 2>/dev/null || true)"
   status="$(printf '%s' "$out" | plutil -extract status raw -o - - 2>/dev/null || true)"
-  if [ "$status" != "Accepted" ]; then
-    if [ -n "$id" ]; then
+  if [[ "$status" != "Accepted" ]]; then
+    if [[ -n "$id" ]]; then
       xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" || true
     fi
     echo "error: notarization of $(basename "$file") failed (status: ${status:-unknown})" >&2
@@ -122,7 +126,7 @@ sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 
-if [ "$NOTARIZE" = 1 ]; then
+if [[ "$NOTARIZE" = 1 ]]; then
   ditto -c -k --keepParent "$APP" "$WORK/LightCraft-notarize.zip"
   notarize "$WORK/LightCraft-notarize.zip"
   xcrun stapler staple "$APP"
@@ -145,16 +149,16 @@ rm -f "$DMG"
 # create -srcfolder preserves the signed app and the existing .DS_Store layout.
 # hdiutil may transiently return "Resource busy" on CI; retry boundedly.
 hdiutil_retry() {
-  local attempt
+  local verb="$1" attempt
   for attempt in 1 2 3 4 5; do
     if hdiutil "$@"; then
       return 0
     fi
-    if [ "$attempt" = 5 ]; then
-      echo "error: hdiutil $1 failed after five attempts" >&2
+    if [[ "$attempt" = 5 ]]; then
+      echo "error: hdiutil $verb failed after five attempts" >&2
       return 1
     fi
-    warn "hdiutil $1 attempt $attempt failed; retrying"
+    warn "hdiutil $verb attempt $attempt failed; retrying"
     sleep $((attempt * 10))
   done
 }
@@ -175,17 +179,17 @@ verify_dmg_app() {
   fi
   echo "==> strict codesign of LightCraft.app in finished DMG"
   codesign --verify --deep --strict --verbose=2 "$mount/LightCraft.app" || rc=1
-  if [ "$rc" = 0 ]; then
+  if [[ "$rc" = 0 ]]; then
     ditto "$mount/LightCraft.app" "$copy/LightCraft.app" || rc=1
   fi
-  if [ "$rc" = 0 ]; then
+  if [[ "$rc" = 0 ]]; then
     echo "==> strict codesign of LightCraft.app after ditto install-copy"
     codesign --verify --deep --strict --verbose=2 "$copy/LightCraft.app" || rc=1
   fi
-  if [ "$rc" = 0 ] && [ "$NOTARIZE" = 1 ]; then
+  if [[ "$rc" = 0 ]] && [[ "$NOTARIZE" = 1 ]]; then
     spctl --assess --type execute -vvv "$copy/LightCraft.app" || rc=1
   fi
-  if [ "$rc" != 0 ]; then
+  if [[ "$rc" != 0 ]]; then
     echo "error: published-image app verification failed; reject $DMG" >&2
     xattr -lr "$mount/LightCraft.app" >&2 || true
   fi
@@ -197,7 +201,7 @@ verify_dmg_app() {
   return "$rc"
 }
 verify_dmg_app
-if [ "$NOTARIZE" = 1 ]; then
+if [[ "$NOTARIZE" = 1 ]]; then
   notarize "$DMG"
   xcrun stapler staple "$DMG"
   xcrun stapler validate "$DMG"
@@ -218,7 +222,7 @@ codesign --verify --strict --verbose=2 "$CLI_DIR/lightcraft-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
 # A bare Mach-O can't carry a stapled ticket; Gatekeeper looks the notarization up online.
-if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
+if [[ "$NOTARIZE" = 1 ]]; then notarize "$CLI_ZIP"; fi
 
 "$WORK/bin/lightcraft-cli" --version
 echo "==> done"
