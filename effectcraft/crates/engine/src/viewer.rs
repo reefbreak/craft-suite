@@ -335,11 +335,8 @@ fn targets_in(ctx: &EvalCtx, exclude: &[LayerId], opts: SnapOptions) -> Vec<Snap
     }
     if opts.guides {
         for g in &comp.guides {
-            out.push(if g.vertical {
-                SnapTarget::vline(g.position, PRI_GUIDE, SnapSource::Guide)
-            } else {
-                SnapTarget::hline(g.position, PRI_GUIDE, SnapSource::Guide)
-            });
+            let pos = g.px(comp.width, comp.height);
+            out.push(if g.vertical { SnapTarget::vline(pos, PRI_GUIDE, SnapSource::Guide) } else { SnapTarget::hline(pos, PRI_GUIDE, SnapSource::Guide) });
         }
     }
     if opts.grid && opts.grid_spacing >= 1.0 {
@@ -365,7 +362,7 @@ const MAX_COLLAPSED_DEPTH: usize = 8;
 fn visible_layers<'a>(ctx: &EvalCtx<'a>, exclude: &'a [LayerId]) -> impl Iterator<Item = &'a Layer> {
     let comp = ctx.comp;
     let time = ctx.time;
-    let any_solo = comp.layers.iter().any(|l| l.switches.solo && l.source.is_av() && l.is_active_at(time));
+    let any_solo = comp.layers.iter().any(|l| l.switches.solo && l.source.is_av());
     comp.layers.iter().filter(move |l| l.is_active_at(time) && l.switches.video && (!any_solo || l.switches.solo) && !exclude.contains(&l.id))
 }
 
@@ -666,10 +663,10 @@ impl SimProfile {
     }
 
     pub fn parse(s: &str) -> Option<SimProfile> {
-        let k: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+        let k: String = s.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
         SimProfile::ALL
             .into_iter()
-            .find(|p| p.id().to_ascii_lowercase() == k || p.label().chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase() == k)
+            .find(|p| p.id().to_ascii_lowercase() == k || p.label().chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase() == k)
             .or(match k.as_str() {
                 "off" => Some(SimProfile::None),
                 "hdtv" | "bt709" => Some(SimProfile::Rec709),
