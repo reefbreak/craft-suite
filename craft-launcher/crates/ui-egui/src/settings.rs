@@ -19,6 +19,7 @@ pub enum ViewMode {
 pub enum Filter {
     #[default]
     All,
+    // These three no longer appear in the toolbar but must remain deserializable from old settings.
     Installed,
     Updates,
     NotInstalled,
@@ -40,13 +41,15 @@ pub enum SortKey {
     Latest,
     /// Release date.
     Released,
+    /// How often the app has been opened from here, most first.
+    Frequent,
 }
 
 impl SortKey {
     /// The direction a first click sorts in: newest and highest first for dates and versions,
     /// A to Z for text.
     pub fn starts_descending(self) -> bool {
-        matches!(self, Self::Installed | Self::Latest | Self::Released)
+        matches!(self, Self::Installed | Self::Latest | Self::Released | Self::Frequent)
     }
 }
 
@@ -84,6 +87,7 @@ impl CheckEvery {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub install_locations: artcraft_launcher_core::protocol::InstallLocations,
     pub view: ViewMode,
     pub filter: Filter,
     pub sort: SortKey,
@@ -114,11 +118,22 @@ pub struct Settings {
     pub last_check: Option<i64>,
     /// Catalog ids of apps hidden from the main lists (`photocraft`, …).
     pub hidden: std::collections::BTreeSet<String>,
+    /// The one-time notice that closing the window keeps the launcher in the tray has been shown.
+    pub tray_hint_shown: bool,
+    /// How many times each app was opened from the launcher (catalog id → count), for "Frequently used".
+    pub launches: BTreeMap<String, u32>,
 }
 
 impl Settings {
     /// Machine-readable code for "follow the system language".
-    pub const LANGUAGE_AUTO: &'static str = "auto";
+    pub const LANGUAGE_AUTO: &str = "auto";
+
+    /// Clear saved catalog filters whose controls were removed from the toolbar.
+    pub fn migrate(&mut self) {
+        if !matches!(self.filter, Filter::All | Filter::Hidden) {
+            self.filter = Filter::All;
+        }
+    }
 
     /// Display name for a language `code`: a language's name in itself, from the registry
     /// ([`LANGUAGES`](crate::i18n::LANGUAGES)). A language needing a CJK font is named in English,
@@ -169,6 +184,7 @@ pub fn default_preferred_kinds() -> Vec<PackageKind> {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            install_locations: Default::default(),
             view: ViewMode::Grid,
             filter: Filter::All,
             sort: SortKey::Suite,
@@ -186,6 +202,8 @@ impl Default for Settings {
             notified: BTreeMap::new(),
             last_check: None,
             hidden: std::collections::BTreeSet::new(),
+            tray_hint_shown: false,
+            launches: BTreeMap::new(),
         }
     }
 }
