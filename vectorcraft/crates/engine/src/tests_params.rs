@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use crate::cmd::params::{UNCHECKED, check_keys, check_params, doc_keys};
+use crate::cmd::params::{UNCHECKED, check_effect_params, check_keys, check_params, doc_keys};
 use crate::{EngineError, Session, command_specs, find_command};
 
 fn keys(doc: &str) -> Vec<&str> {
@@ -56,7 +56,7 @@ fn an_unknown_key_is_named_with_the_nearest_accepted_one() {
     assert_eq!(refusal("select.all", json!({"zzz": 1})), "unknown parameter `zzz`; the command takes no parameters");
     assert_eq!(
         refusal("shape.line", json!({"x1": 0, "y1": 0, "x2": 5, "y2": 5, "colour": "red"})),
-        "unknown parameter `colour`; the command takes: x1, y1, x2, y2"
+        "unknown parameter `colour`; the command takes: x1, y1, x2, y2, fill"
     );
     for (id, ok) in [
         ("file.new", json!({"width": 300, "title": "a", "artboardLayout": {"anything": 1}})),
@@ -93,6 +93,90 @@ fn a_batch_checks_its_steps() {
         other => panic!("{other:?}"),
     }
     assert_eq!(refusal("command.batch", json!({"steps": []})), "unknown parameter `steps`; the command takes: label, commands, artboard");
+}
+
+/// #1592: the `params` of an effect are held to the effect's own keys and types, where the effect
+/// is named (`effect.apply`) and where the document says which it is (`effect.setParams`).
+#[test]
+fn effect_params_are_the_effects_own() {
+    use vectorcraft_render::effects::effect_catalog;
+    for e in effect_catalog() {
+        doc_keys(e.params).unwrap_or_else(|why| panic!("{}: {why}", e.id));
+        check_effect_params("effect.apply", e.id, &e.defaults).unwrap_or_else(|why| panic!("{}'s defaults: {why}", e.id));
+    }
+    let apply = |effect: &str, params| json!({"effect": effect, "params": params});
+    assert_eq!(refusal("effect.apply", apply("blur.gaussian", json!({"blurr": 3}))), "unknown parameter `blurr`; the command takes: radius");
+    assert_eq!(
+        refusal("appearance.addEffect", apply("stylize.dropShadow", json!({"opacty": 50}))),
+        "unknown parameter `opacty`; did you mean `opacity`?"
+    );
+    assert_eq!(refusal("effect.apply", apply("blur.gaussian", json!({"radius": "big"}))), "`radius` must be a number");
+    assert_eq!(refusal("effect.apply", apply("threeD.revolve", json!({"shade": 1}))), "`shade` must be true or false");
+    assert_eq!(refusal("effect.apply", apply("threeD.revolve", json!({"edge": 1}))), "`edge` must be a string");
+    // Out of range is the effect's to clamp; a key only its description names is one it takes;
+    // a plug-in's are its manifest's; an unknown effect is the command's to report.
+    for (effect, params) in [
+        ("stylize.dropShadow", json!({"opacity": 500, "x": -3, "color": "#ff0000"})),
+        ("stylize.dropShadow", json!({"color": [1, 0, 0]})),
+        ("threeD.revolve", json!({"segments": 100000})),
+        ("path.outlineStroke", json!({"width": 2})),
+        ("plugin.anything", json!({"whatever": 1})),
+        ("no.such", json!({"whatever": 1})),
+    ] {
+        assert!(check_params("effect.apply", &apply(effect, params.clone())).is_ok(), "{effect} {params}");
+    }
+    // `effect.setParams` names an index: the session knows the effect there.
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 50, "height": 40})).unwrap();
+    s.execute("effect.apply", &apply("blur.gaussian", json!({"radius": 2}))).unwrap();
+    for (params, why) in [(json!({"blurr": 3}), "unknown parameter `blurr`"), (json!({"radius": true}), "`radius` must be a number")] {
+        let e = s.execute("effect.setParams", &json!({"index": 0, "params": params})).unwrap_err().to_string();
+        assert!(e.contains(why), "{e}");
+    }
+    s.execute("effect.setParams", &json!({"index": 0, "params": {"radius": 1e9}, "visible": false})).unwrap();
+    // No effect at the index: the command says so, not the check.
+    assert!(s.check_params("effect.setParams", &json!({"index": 7, "params": {"blurr": 3}})).is_ok());
+}
+
+/// The Transform effect (`distort.transform`) is held to its params description: `effect.apply`
+/// and `effect.setParams` refuse each of its on/off options given as text, such as `reflectX:
+/// "false"`, and each of its numbers given as text, such as `copies: "0"`, and leave the effect
+/// as it was; true, false and numbers pass. The loop takes the keys from the effect's defaults, so
+/// an option the effect gains is checked too.
+#[test]
+fn transform_effect_refuses_a_boolean_or_number_given_as_text() {
+    let info = vectorcraft_render::effects::effect_info("distort.transform").unwrap();
+    let one = |key: &str, v: serde_json::Value| serde_json::Value::Object([(key.to_string(), v)].into_iter().collect());
+    let apply = |params| json!({"effect": "distort.transform", "params": params});
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 50, "height": 40})).unwrap();
+    s.execute("effect.apply", &apply(json!({"moveH": 20}))).unwrap();
+    let state = |s: &Session| {
+        let st = s.doc().unwrap();
+        (st.history.undo.len(), st.doc.layers[0].children().unwrap()[0].appearance.effects[0].params.clone())
+    };
+    let before = state(&s);
+    let mut switches = vec![];
+    for (key, default) in info.defaults.as_object().unwrap() {
+        let why = match default {
+            serde_json::Value::Bool(_) => format!("`{key}` must be true or false"),
+            serde_json::Value::Number(_) => format!("`{key}` must be a number"),
+            _ => continue,
+        };
+        if default.is_boolean() {
+            switches.push(key.as_str());
+        }
+        let text = json!(default.to_string());
+        assert_eq!(refusal("effect.apply", apply(one(key, text.clone()))), why);
+        let e = s.execute("effect.setParams", &json!({"index": 0, "params": one(key, text)})).unwrap_err().to_string();
+        assert!(e.contains(&why), "{e}");
+        assert!(check_params("effect.apply", &apply(one(key, default.clone()))).is_ok(), "{key}");
+    }
+    assert!(["reflectX", "reflectY", "random"].iter().all(|k| switches.contains(k)), "{switches:?}");
+    assert_eq!(state(&s), before);
+    s.execute("effect.setParams", &json!({"index": 0, "params": {"reflectX": true, "random": false, "copies": 2}})).unwrap();
 }
 
 /// What a command notes for its journal entry is a key its description names, so the entry

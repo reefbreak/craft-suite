@@ -2,7 +2,7 @@
 //! [`Backend`].
 
 use serde_json::{Map, Value, json};
-use vectorcraft_engine::cmd::fileio::{ARTBOARD_PARAMS, FORMATS, OPEN_EXTS, SAVE_FORMATS, format};
+use vectorcraft_engine::cmd::fileio::{ARTBOARD_PARAMS, FORMATS, OPEN_EXTS, SAVE_FORMATS, format, save_reads_option, writable_format};
 
 use crate::backend::Backend;
 
@@ -36,12 +36,48 @@ fn num(desc: &str) -> Value {
 fn string(desc: &str) -> Value {
     json!({"type": "string", "description": desc})
 }
+/// The arguments `save_file` passes on to `document.save` beside `path`.
+const SAVE_FILE_OPTIONS: [&str; 4] = ["compress", "version", "preview", "options"];
+/// The arguments `doc_inspect` / `inspect_document` pass on to `document.inspect`.
+const INSPECT_KEYS: [&str; 6] = ["depth", "childLimit", "ids", "kind", "limit", "offset"];
+
+/// Their schema.
+fn inspect_props() -> Value {
+    json!({
+        "depth": {"type": "integer", "minimum": 0, "description": "Child levels of the layer tree to include (default all; 0 = top layers with counts)"},
+        "childLimit": {"type": "integer", "minimum": 0, "description": "Children shown per node (default all; a level that shows fewer reports childCount)"},
+        "ids": {"type": "array", "maxItems": 10000, "items": {"type": "integer", "minimum": 0}, "description": "List just these nodes (any level) as `nodes` instead of the whole layer tree; an unknown id is an error"},
+        "kind": {"type": "string", "description": "List every node of this panel label (Layer, Group, Path, Type, Image, ...; ignores case) as `nodes`, each with its ancestor `path`; searches the subtrees of `ids` when given"},
+        "limit": {"type": "integer", "minimum": 0, "description": "At most this many layers or nodes (the reply adds `total`)"},
+        "offset": {"type": "integer", "minimum": 0, "description": "Layers or nodes skipped first (default 0)"}
+    })
+}
 fn paint_schema(what: &str) -> Value {
     json!({
         "description": format!("{what}: \"#rrggbb\", \"none\", [r,g,b] (0..1), {{\"c\",\"m\",\"y\",\"k\"}}, {{\"gray\"}}, or a full paint.setFill params object ({{\"gradient\":…}} / {{\"swatch\":name}})"),
         "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "number"}}, {"type": "object"}]
     })
 }
+/// The options `draw_path` and `draw_shape` apply to the object they draw (#2112).
+fn with_draw_options(mut props: Value) -> Value {
+    let more = json!({
+        "dash": {"description": "Dash and gap lengths in pt ([d, g, …]), or null for a solid stroke (stroke.set `dash`)", "anyOf": [{"type": "array", "items": {"type": "number"}}, {"type": "null"}]},
+        "cap": {"type": "string", "enum": ["butt", "round", "square", "projecting"], "description": "Stroke cap"},
+        "join": {"type": "string", "enum": ["miter", "round", "bevel"], "description": "Stroke corner join"},
+        "opacity": {"type": "number", "minimum": 0, "maximum": 100, "description": "Opacity in % (object.setProps `opacity`)"},
+        "name": string("Name in the Layers panel"),
+        "effects": {
+            "type": "array",
+            "description": "Live effects applied in order, as apply_effect: [{effect: id (effect.list), params?: {…}}]",
+            "items": obj(json!({"effect": string("Effect id, e.g. \"blur.gaussian\""), "params": {"type": "object"}}), &["effect"]),
+        },
+    });
+    if let (Some(p), Value::Object(more)) = (props.as_object_mut(), more) {
+        p.extend(more);
+    }
+    props
+}
+
 fn mods_schema() -> Value {
     json!({
         "type": "object",
@@ -82,23 +118,26 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "command_list",
             "List commands",
-            "Discover command ids, labels, parameter descriptions and enabled state. Returns an array.",
-            obj(json!({"filter": string("Case-insensitive id, label or menu substring"), "enabled_only": {"type":"boolean"}}), &[]),
+            "Discover command ids, labels, parameter descriptions and enabled state. Returns an array. The whole catalogue is large: narrow it with filter (or query), menu, and brief. list_commands lists the same commands; it takes enabledOnly instead of enabled_only and returns {count, commands}.",
+            obj(
+                json!({"filter": string("Case-insensitive id, label or menu substring"), "query": string("Same as filter"), "menu": string(MENU_FILTER), "enabled_only": {"type":"boolean"}, "brief": {"type":"boolean", "description": BRIEF}}),
+                &[],
+            ),
             true,
         ),
         tool(
             "command_run",
             "Run a command",
-            "Run an engine command by id with its JSON params. Command parameters follow the registry's descriptions.",
+            "Run an engine command by id with its JSON params. Command parameters follow the registry's descriptions. run_command runs it the same way; it takes the id as command instead of id.",
             obj(json!({"id": string("Command id"), "params": {"type":"object"}}), &["id"]),
             false,
         ),
         tool(
             "command_batch",
             "Run several commands",
-            "Run steps in order; each edit is its own undo step, or with atomic:true the whole batch is one (named `label`, else after its first edit). A param string that is exactly \"$N.path\" (N: 0-based step index) or \"$last.path\" takes that value from an earlier step's result, e.g. {\"id\":\"$1.id\"}; \"$$\" starts a literal \"$\". Returns completed, failed and results. Stops on the first error by default.",
+            "Run steps in order; each edit is its own undo step, or with atomic:true the whole batch is one (named `label`, else after its first edit; `atomic` says which documents). A step's id is a command id, or draw_path / draw_shape with that tool's arguments as params (its result is the tool's: the new object's `id`). A param string that is exactly \"$N.path\" (N: 0-based step index) or \"$last.path\" takes that value from an earlier step's result, e.g. {\"id\":\"$1.id\"}; \"$$\" starts a literal \"$\". Returns completed, failed, results and created (the ids draw_path / draw_shape steps made, in order). Stops on the first error by default. At most 256 steps; kept step results total at most 8 MiB, past which the batch stops with the reason.",
             obj(
-                json!({"steps": {"type":"array", "items":obj(json!({"id":string("Command id"),"params":{"type":"object"}}), &["id"])}, "stop_on_error":{"type":"boolean", "default":true}, "atomic":{"type":"boolean", "default":false, "description":"Make the batch's edits one undo step (needs an open document)"}, "label":string("The undo step's name with atomic")}),
+                json!({"steps": {"type":"array", "maxItems": 256, "items":obj(json!({"id":string("Command id, or draw_path / draw_shape"),"params":{"type":"object"}}), &["id"])}, "stop_on_error":{"type":"boolean", "default":true}, "atomic":{"type":"boolean", "default":false, "description":"Make the batch's edits one undo step in the active document and in each document a step opens or creates; in a document open before the batch that a step switches to, each edit stays its own undo step"}, "label":string("The undo step's name with atomic")}),
                 &["steps"],
             ),
             false,
@@ -106,8 +145,8 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "doc_inspect",
             "Inspect document",
-            "Summary of the active document, including artboards, layer tree, selection and history.",
-            obj(json!({"depth":{"type":"integer", "minimum":0},"childLimit":{"type":"integer", "minimum":0}}), &[]),
+            "Summary of the active document, including artboards, layer tree, selection and history. On a large document scope it: depth 0 for the layer skeleton, ids for just those nodes, kind for every node of one kind, limit/offset to page. inspect_document returns the same summary.",
+            obj(inspect_props(), &[]),
             true,
         ),
         tool(
@@ -120,20 +159,26 @@ pub fn tool_definitions() -> Vec<Value> {
             ),
             true,
         ),
-        tool("ui_inspect", "Inspect the interface", "Inspect the connected desktop interface; returns a tool error in headless mode.", empty(), true),
+        tool(
+            "ui_inspect",
+            "Inspect the interface",
+            "Inspect the connected desktop interface; returns a tool error in headless mode. The same call as inspect_ui.",
+            empty(),
+            true,
+        ),
         tool(
             "ui_screenshot",
             "Capture the interface",
-            "Capture the connected desktop window as inline PNG; requires a running desktop app.",
-            empty(),
+            "Capture the connected desktop window as inline PNG; requires a running desktop app. The same call as screenshot with window:true. max_side scales the returned image down to at most that many pixels on its longer side (1..4096; default: the full capture).",
+            obj(json!({"max_side": {"type":"integer","minimum":1,"maximum":4096,"description":MAX_SIDE_WINDOW}}), &[]),
             true,
         ),
         tool(
             "list_commands",
             "List commands",
-            "List VectorCraft commands (id, label, menu path, shortcut, parameter description, enabled state). Every editing action is a command; run any of them with run_command. Coordinates are points in document space, y down, origin at the first artboard's top-left.",
+            "List VectorCraft commands (id, label, menu path, shortcut, parameter description, enabled state). Every editing action is a command; run any of them with run_command. Coordinates are points in document space, y down, origin at the first artboard's top-left. command_list lists the same commands as a bare array and takes enabled_only.",
             obj(
-                json!({"filter": string("Case-insensitive substring matched against id, label and menu path (e.g. \"align\", \"Object\")"), "enabledOnly": {"type": "boolean", "description": "Only commands that can run right now"}}),
+                json!({"filter": string("Case-insensitive substring matched against id, label and menu path (e.g. \"align\", \"Object\")"), "query": string("Same as filter"), "menu": string(MENU_FILTER), "enabledOnly": {"type": "boolean", "description": "Only commands that can run right now"}, "brief": {"type": "boolean", "description": BRIEF}}),
                 &[],
             ),
             true,
@@ -141,7 +186,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "run_command",
             "Run command",
-            "Execute any VectorCraft command by id with JSON params (see list_commands for ids and params). Examples: {\"command\":\"object.group\"}, {\"command\":\"object.align\",\"params\":{\"horizontal\":\"left\"}}, {\"command\":\"file.new\",\"params\":{\"width\":800,\"height\":600}}. Returns the command's result (e.g. {id} for creation commands).",
+            "Execute any VectorCraft command by id with JSON params (see list_commands for ids and params). Examples: {\"command\":\"object.group\"}, {\"command\":\"object.align\",\"params\":{\"horizontal\":\"left\"}}, {\"command\":\"file.new\",\"params\":{\"width\":800,\"height\":600}}. Returns the command's result (e.g. {id} for creation commands). command_run runs it the same way and takes the id as id.",
             obj(
                 json!({"command": string("Command id, e.g. shape.rectangle, object.group, paint.setFill"), "params": {"type": "object", "description": "Command parameters"}}),
                 &["command"],
@@ -151,20 +196,14 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "inspect_document",
             "Inspect document",
-            "Summary of the active document: artboards, layer tree (ids, names, kinds, bounds, fill/stroke), selection, undo history, current tool and default paint. On a large document pass depth: 0 for the layer skeleton (truncated levels report childCount), then locate objects with run_command document.find and read them with document.node.",
-            obj(
-                json!({
-                    "depth": {"type": "integer", "minimum": 0, "description": "Child levels of the layer tree to include (default all; 0 = top layers with counts)"},
-                    "childLimit": {"type": "integer", "minimum": 0, "description": "Children shown per node (default all; a level that shows fewer reports childCount)"}
-                }),
-                &[],
-            ),
+            "Summary of the active document: artboards, layer tree (ids, names, kinds, bounds, fill/stroke), selection, undo history, current tool and default paint. On a large document pass depth: 0 for the layer skeleton (truncated levels report childCount), then locate objects with run_command document.find and read them with document.node. doc_inspect returns the same summary.",
+            obj(inspect_props(), &[]),
             true,
         ),
         tool(
             "inspect_ui",
             "Inspect UI",
-            "UI state of the running desktop app: tool and options, panels, dialogs, view (zoom/center), window, documents, perf. Desktop app only.",
+            "UI state of the running desktop app: tool and options, panels, dialogs, view (zoom/center), window, documents, perf. Desktop app only. The same call as ui_inspect.",
             empty(),
             true,
         ),
@@ -203,16 +242,16 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "draw_path",
             "Draw path",
-            "Create a path from points ([[x,y],…] or [{x,y,in?:[x,y],out?:[x,y]},…] with Bézier handles) or SVG path data `d`, then apply optional paint. Omitted paint fields inherit the current new-art appearance (initially white fill and 1 pt black stroke). For a filled path without an outline, pass an explicit fill and stroke:\"none\". Returns the new object id.",
+            "Create a path from points ([[x,y],…] or [{x,y,in?:[x,y],out?:[x,y]},…] with Bézier handles) or SVG path data `d`, then apply optional paint, stroke dash/cap/join, opacity, name and live effects. Omitted paint fields inherit the current new-art appearance (initially white fill and 1 pt black stroke). For a filled path without an outline, pass an explicit fill and stroke:\"none\". Returns the new object id.",
             obj(
-                json!({
+                with_draw_options(json!({
                     "points": {"type": "array", "description": "Anchors: [x,y] pairs or {x, y, in?, out?, smooth?} objects", "items": {"anyOf": [{"type": "array", "items": {"type": "number"}, "minItems": 2}, {"type": "object"}]}},
                     "d": string("SVG path data (alternative to points), e.g. \"M0 0 L100 0 L50 80 Z\""),
                     "closed": {"type": "boolean", "description": "Close the path (points only)"},
                     "fill": paint_schema("Fill"),
                     "stroke": paint_schema("Stroke"),
                     "strokeWidth": num("Stroke weight in pt"),
-                }),
+                })),
                 &[],
             ),
             false,
@@ -220,9 +259,9 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "draw_shape",
             "Draw shape",
-            "Create a live shape and apply optional paint. rectangle/ellipse: x, y, width, height (rectangle: radius = corner radius). polygon: cx, cy, radius, sides. star: cx, cy, radius1, radius2, points. line: x1, y1, x2, y2. Omitted paint fields inherit the current new-art appearance (initially white fill and 1 pt black stroke); lines start with no fill and a visible stroke. For a filled shape without an outline, pass an explicit fill and stroke:\"none\". Returns the new object id.",
+            "Create a live shape and apply optional paint. rectangle/ellipse: x, y, width, height (rectangle: radius = corner radius). polygon: cx, cy, radius, sides. star: cx, cy, radius1, radius2, points. line: x1, y1, x2, y2. Omitted paint fields inherit the current new-art appearance (initially white fill and 1 pt black stroke); lines start with no fill and a visible stroke. For a filled shape without an outline, pass an explicit fill and stroke:\"none\". Stroke dash/cap/join, opacity, name and live effects apply to the new shape as in draw_path. Returns the new object id.",
             obj(
-                json!({
+                with_draw_options(json!({
                     "shape": {"type": "string", "enum": ["rectangle", "ellipse", "polygon", "star", "line"]},
                     "x": num("Left (rectangle/ellipse)"),
                     "y": num("Top (rectangle/ellipse)"),
@@ -243,7 +282,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "fill": paint_schema("Fill"),
                     "stroke": paint_schema("Stroke"),
                     "strokeWidth": num("Stroke weight in pt"),
-                }),
+                })),
                 &["shape"],
             ),
             false,
@@ -251,7 +290,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "set_paint",
             "Set paint",
-            "Set fill, stroke and/or stroke weight on the selection (or `ids`) and as the default for new art.",
+            "Set fill, stroke and/or stroke weight on the selection (or `ids`) and as the default for new art. Returns {applied, objects}: `objects` counts the objects painted, as paint.setFill, paint.setStroke and stroke.set report them (the largest of their counts); when it is 0, a `note` says that only the default for new art changed.",
             obj(
                 json!({
                     "fill": paint_schema("Fill"),
@@ -297,13 +336,14 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "screenshot",
             "Screenshot",
-            "Render the active artboard to PNG and return it as an image (optionally also saving it to `path`). With window:true (desktop app only) captures the whole app window instead.",
+            "Render the active artboard to PNG and return it as an image (optionally also saving it to `path`). With window:true (desktop app only) captures the whole app window instead, as ui_screenshot does; max_side then scales the returned image down (a file written to `path` keeps the full capture).",
             obj(
                 json!({
                     "path": string("Also write the PNG here"),
                     "scale": num("Pixels per point (default 1)"),
                     "artboard": {"type": "integer", "minimum": 0, "description": "Artboard index (default 0)"},
                     "window": {"type": "boolean", "description": "Capture the app window (desktop app only)"},
+                    "max_side": {"type": "integer", "minimum": 1, "maximum": 4096, "description": MAX_SIDE_WINDOW},
                 }),
                 &[],
             ),
@@ -323,23 +363,32 @@ pub fn tool_definitions() -> Vec<Value> {
             "save_file",
             "Save file",
             &format!(
-                "Save the active document with the engine's document.save: by default to its own file in its own format (native .vectorcraft unless it was opened from or saved as SVG, PDF or a restorable .ai). With `path`, the extension picks the format: .{}. Other formats are exports (see export). The reply's `format` says what was written and `warnings` what that format loses.",
+                "Save the active document with the engine's document.save: by default to its own file in its own format (native .vectorcraft unless it was opened from or saved as SVG, PDF or a restorable .ai). With `path`, the extension picks the format: .{}. Other formats are exports (see export). A native file is gzipped when `compress` is true (default: the useCompression preference, Preferences > File Handling > Use Compression); `version` writes it for an older VectorCraft and `preview` embeds a PNG of the first artboard. `options` carries the format's save options (see run_command document.formats); giving `compress`, `version` or `preview` both at the top level and in `options` with different values is an error. The reply's `format` says what was written and `warnings` what that format loses and each option given that the format doesn't read (such as `compress` for .svg). In the running app the call returns once the file is written, or with the error, even with Background Save on. When the save asks first (before replacing a file that opened with losses, or with a file dialog for an untitled document without `path`), the reply is `pending` or \"cancelled\" as before.",
                 save_extensions().join(", .")
             ),
-            obj(json!({"path": string("Destination; its extension picks the format (default: the document's own file)")}), &[]),
+            obj(
+                json!({
+                    "path": string("Destination; its extension picks the format (default: the document's own file)"),
+                    "compress": {"type": "boolean", "description": "Native files: gzip the file (default: the useCompression preference)"},
+                    "version": {"type": "integer", "minimum": 1, "maximum": vectorcraft_format::VERSION, "description": "Native files: the format version to write (default: the current one; 1 and 2 are never compressed)"},
+                    "preview": {"type": "boolean", "description": "Native files: embed a PNG of the first artboard, at most 256 px (default false)"},
+                    "options": {"type": "object", "description": "The format's save options, passed through (see run_command document.formats); default: as last saved"},
+                }),
+                &[],
+            ),
             false,
         ),
         tool(
             "export",
             "Export",
-            "Export the active document with the engine's document.export (the same bytes in the app and headless), in any format of the `format` enum: vectors (svg/svgz with the artboard as viewBox, eps, dxf, emf, wmf), pdf (one page per artboard: all, or `artboard` / `range`), rasters (one rendered artboard: png, jpg, webp, gif, png8 as an indexed .png, tiff, bmp, tga, psd with its layers), txt (the stories, back to front), vectorcraft or template (a native copy or template; the document keeps its path). run_command document.formats lists each format's options. For SVG/SVGZ, top-level `outlineText: true` writes text as paths; DXF takes it too (its type is outlined anyway unless `preserve: editability`). PDF instead uses `options.advanced.outlineText: true`, default false (live text). `selection: true` exports only the selected objects, cropped to their bounds. Template layers are left out; live effects are kept (geometry baked, SVG filters for shadows/glows/blur). Without `path` the bytes come back as dataBase64.",
+            "Export the active document with the engine's document.export (the same bytes in the app and headless), in any format of the `format` enum: vectors (svg/svgz with the artboard as viewBox, eps, dxf, emf, wmf), pdf and ai (one page per artboard: all, or `artboard` / `range`; ai is the PDF-compatible .ai file that Save writes, which carries the document when every artboard is written in order), rasters (one rendered artboard: png, jpg, webp, gif, png8 as an indexed .png, tiff, bmp, tga, psd with its layers), txt (the stories, back to front), vectorcraft or template (a native copy or template; the document keeps its path). run_command document.formats lists each format's options. For SVG/SVGZ, top-level `outlineText: true` writes text as paths; DXF takes it too (its type is outlined anyway unless `preserve: editability`). PDF instead uses `options.advanced.outlineText: true`, default false (live text). `selection: true` exports only the selected objects, cropped to their bounds. Template layers are left out; live effects are kept (geometry baked, SVG filters for shadows/glows/blur). Without `path` the bytes come back as dataBase64.",
             obj(
                 json!({
                     "format": {"type": "string", "enum": FORMATS.iter().filter(|f| f.write).map(|f| f.id).collect::<Vec<_>>(), "description": "Default: from the path's extension"},
                     "path": string("Destination file (omit to get dataBase64)"),
                     "scale": num("Raster pixels per point (default 1)"),
-                    "artboard": {"type": "integer", "minimum": 0, "description": "0-based artboard (default: the first; PDF default: all)"},
-                    "range": string("1-based artboards such as \"1-3, 5\" (PDF: one page each; other formats take one)"),
+                    "artboard": {"type": "integer", "minimum": 0, "description": "0-based artboard (default: the first; PDF and .ai default: all)"},
+                    "range": string("1-based artboards such as \"1-3, 5\" (PDF and .ai: one page each; SVG and SVGZ: one file each; EPS: one file each, after a central file of the whole document when there are two or more and art shows; rasters, DXF, EMF and WMF: one, or one file each with options.useArtboards: true)"),
                     "selection": {"type": "boolean", "description": "Export only the selection, cropped to it"},
                     "outlineText": {"type": "boolean", "description": "SVG/SVGZ: true writes text as outlines (viewable without the fonts). DXF takes it too (type outlined anyway unless preserve: editability). PDF uses options.advanced.outlineText instead (default false: live text)"},
                     "options": {"type": "object", "description": "More format options, passed through (see run_command document.formats), e.g. {\"quality\": 80} for jpg or {\"advanced\": {\"outlineText\": true}} for PDF text as outlines (default false: live text)"},
@@ -355,10 +404,11 @@ pub fn tool_definitions() -> Vec<Value> {
             obj(
                 json!({
                     "text": {"type": "string"},
-                    "x": num("Baseline origin x (point/area type: left)"),
+                    "x": num("Baseline origin x (area type: left; point type: where the line starts, or its centre or end with justify center/right)"),
                     "y": num("First baseline y (area type: top)"),
                     "width": num("Area type frame width"),
                     "height": num("Area type frame height"),
+                    "vertical": {"type": "boolean", "description": "Vertical writing for point, area or path type (default false, horizontal), as text.create / text.createInPath"},
                     "fit": {"type": "string", "enum": ["none", "autoHeight", "shrinkText"], "description": "Area type: keep the frame (none), fit its height to the text (autoHeight) or scale overflowing text down (shrinkText)"},
                     "fitMinPercent": num("shrinkText: the smallest scale in percent, 10 to 100 (default 50)"),
                     "path": {"type": "integer", "description": "Existing path id to flow the text in (area) or along (onPath)"},
@@ -367,6 +417,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "size": num("Font size in pt"),
                     "font": {"type": "string", "description": "Font family"},
                     "color": paint_schema("Text colour (#rrggbb)"),
+                    "justify": {"type": "string", "enum": ["auto", "left", "center", "right", "justifyAll"], "description": "Paragraph alignment (default auto: the start of the text's direction). Point type lines up on x: center centres each line on it, right ends it there"},
                 }),
                 &["text"],
             ),
@@ -456,8 +507,8 @@ pub fn tool_definitions() -> Vec<Value> {
             ),
             false,
         ),
-        tool("undo", "Undo", "Undo the last change (Edit → Undo).", empty(), false),
-        tool("redo", "Redo", "Redo the last undone change (Edit → Redo).", empty(), false),
+        tool("undo", "Undo", "Undo the last change (Edit → Undo). redo reapplies it.", empty(), false),
+        tool("redo", "Redo", "Redo the last undone change (Edit → Redo): the change the last undo took back.", empty(), false),
     ]
 }
 
@@ -467,6 +518,16 @@ type Args = Map<String, Value>;
 
 fn req_str<'a>(a: &'a Args, k: &str) -> Result<&'a str, String> {
     a.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| format!("missing string argument `{k}`"))
+}
+
+/// A file tool's path made absolute against this process's working directory when it goes to the app
+/// (`--connect`). Headless, and for an empty path, it is returned as given.
+fn absolute_path(b: &dyn Backend, p: &str) -> Result<String, String> {
+    if p.is_empty() || !b.has_ui() {
+        return Ok(p.to_owned());
+    }
+    let abs = std::path::absolute(p).map_err(|e| format!("{p}: {e}"))?;
+    abs.into_os_string().into_string().map_err(|abs| format!("{p}: the absolute path {} is not UTF-8", abs.to_string_lossy()))
 }
 
 fn exec(b: &mut dyn Backend, cmd: &str, params: Value) -> Result<Value, String> {
@@ -495,32 +556,152 @@ fn paint_params(v: &Value) -> Result<Value, String> {
     })
 }
 
-fn apply_paint(b: &mut dyn Backend, a: &Args, ids: Option<Value>) -> Result<Value, String> {
-    let with_ids = |mut p: Value| {
-        if let Some(ids) = &ids {
-            p["ids"] = ids.clone();
-        }
-        p
-    };
-    let mut applied = Map::new();
+/// A command a drawing tool runs and its params.
+type Step<'a> = (&'a str, Value);
+
+/// The commands that apply `a`'s `fill`, `stroke`, `strokeWidth`, `dash`, `cap` and `join`, without
+/// targets, and what each applies.
+fn paint_steps(a: &Args) -> Result<(Vec<Step<'static>>, Map<String, Value>), String> {
+    let (mut steps, mut applied) = (vec![], Map::new());
     if let Some(f) = a.get("fill") {
-        exec(b, "paint.setFill", with_ids(paint_params(f)?))?;
+        steps.push(("paint.setFill", paint_params(f)?));
         applied.insert("fill".into(), f.clone());
     }
     if let Some(s) = a.get("stroke") {
-        exec(b, "paint.setStroke", with_ids(paint_params(s)?))?;
+        steps.push(("paint.setStroke", paint_params(s)?));
         applied.insert("stroke".into(), s.clone());
     }
+    // Weight, dash, cap and join go to one stroke.set.
+    let mut stroke = Map::new();
     if let Some(w) = a.get("strokeWidth") {
         let w = w.as_f64().ok_or("`strokeWidth` must be a number")?;
-        exec(b, "stroke.set", with_ids(json!({"weight": w})))?;
+        stroke.insert("weight".into(), json!(w));
         applied.insert("strokeWidth".into(), json!(w));
     }
-    Ok(Value::Object(applied))
+    for k in ["dash", "cap", "join"] {
+        if let Some(v) = a.get(k) {
+            stroke.insert(k.into(), v.clone());
+            applied.insert(k.into(), v.clone());
+        }
+    }
+    if !stroke.is_empty() {
+        steps.push(("stroke.set", Value::Object(stroke)));
+    }
+    Ok((steps, applied))
 }
 
-fn created_id(r: &Value) -> Option<Value> {
-    r.get("id").filter(|v| v.is_u64()).map(|id| json!([id]))
+/// Sets the paint `a` gives on `ids` (default: the selection) and as the default for new art.
+/// Returns the paint applied and the most objects one of its edits painted (the `objects` of the
+/// `paint.setFill`, `paint.setStroke` and `stroke.set` replies).
+fn apply_paint(b: &mut dyn Backend, a: &Args, ids: Option<Value>) -> Result<(Value, u64), String> {
+    let (steps, applied) = paint_steps(a)?;
+    let mut objects = 0;
+    for (cmd, mut p) in steps {
+        if let Some(ids) = &ids {
+            p["ids"] = ids.clone();
+        }
+        let r = exec(b, cmd, p)?;
+        objects = objects.max(r.get("objects").and_then(Value::as_u64).unwrap_or(0));
+    }
+    Ok((Value::Object(applied), objects))
+}
+
+/// Checks `draw_path` / `draw_shape`'s `dash`, `cap`, `join`, `opacity`, `name` and `effects`
+/// before anything is drawn, so a bad one leaves no half-styled object behind (#2112).
+fn check_draw_options(b: &mut dyn Backend, a: &Args) -> Result<(), String> {
+    match a.get("dash") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(d)) if d.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)) => {}
+        Some(_) => return Err("`dash` must be a list of lengths (numbers) or null".into()),
+    }
+    let one_of = |k: &str, names: &[&str]| match a.get(k) {
+        None => Ok(()),
+        Some(v) if v.as_str().is_some_and(|s| names.contains(&s)) => Ok(()),
+        Some(_) => Err(format!("`{k}` must be one of {}", names.join(", "))),
+    };
+    one_of("cap", &["butt", "round", "square", "projecting"])?;
+    one_of("join", &["miter", "round", "bevel"])?;
+    if let Some(o) = a.get("opacity")
+        && !o.as_f64().is_some_and(|o| (0.0..=100.0).contains(&o))
+    {
+        return Err("`opacity` must be a number from 0 to 100 (%)".into());
+    }
+    if a.get("name").is_some_and(|n| !n.is_string()) {
+        return Err("`name` must be a string".into());
+    }
+    let Some(effects) = a.get("effects") else { return Ok(()) };
+    let effects = effects.as_array().ok_or("`effects` must be a list of {effect, params?}")?;
+    if effects.is_empty() {
+        return Ok(());
+    }
+    let catalog = exec(b, "effect.list", json!({}))?;
+    let known: Vec<&str> = catalog.get("catalog").and_then(Value::as_array).into_iter().flatten().filter_map(|e| e.get("id")?.as_str()).collect();
+    for (i, e) in effects.iter().enumerate() {
+        let e = e.as_object().ok_or_else(|| format!("effect {i} must be {{effect, params?}}"))?;
+        if let Some(k) = e.keys().find(|k| *k != "effect" && *k != "params") {
+            return Err(format!("effect {i}: unknown key `{k}` (expected effect, params)"));
+        }
+        let id = e.get("effect").and_then(Value::as_str).ok_or_else(|| format!("effect {i}: missing string `effect`"))?;
+        if !known.contains(&id) {
+            return Err(format!("effect {i}: unknown effect `{id}` (see apply_effect without arguments)"));
+        }
+        if e.get("params").is_some_and(|p| !p.is_object()) {
+            return Err(format!("effect {i}: `params` must be an object"));
+        }
+    }
+    Ok(())
+}
+
+/// Draws an object with `create` (a creating command and its params) and styles it with `a`'s
+/// paint and draw options ([`check_draw_options`], checked first) as ONE `command.batch`, named
+/// `label` (the undo step the creating command makes on its own): any step the engine refuses — a
+/// colour it can't read, a swatch the document lacks — rolls the whole call back, so it leaves no
+/// object and no undo step behind (#3545). The styling steps act on the new object, which the
+/// creating command selects, and on its whole appearance (`item: null`) → `made` with the new
+/// object's `id`, the `paint` applied and the other options applied.
+fn draw(b: &mut dyn Backend, a: &Args, label: &str, create: Step<'_>, mut made: Value) -> Result<Value, String> {
+    check_draw_options(b, a)?;
+    let (paint, applied) = paint_steps(a)?;
+    let mut steps = vec![create];
+    steps.extend(paint);
+    let mut props = json!({});
+    for k in ["name", "opacity"] {
+        if let Some(v) = a.get(k) {
+            props[k] = v.clone();
+            made[k] = v.clone();
+        }
+    }
+    if a.contains_key("name") || a.contains_key("opacity") {
+        steps.push(("object.setProps", props));
+    }
+    // The fill, stroke and effects go to the new object's whole appearance (item: null), as the
+    // Fill and Stroke proxies and the Effect menu apply them to a selected object.
+    let effects = a.get("effects").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    for e in effects {
+        steps.push(("effect.apply", json!({"effect": e.get("effect"), "params": e.get("params").cloned().unwrap_or(json!({}))})));
+    }
+    let commands: Vec<Value> = steps
+        .into_iter()
+        .map(|(cmd, mut p)| {
+            if matches!(cmd, "paint.setFill" | "paint.setStroke" | "stroke.set" | "effect.apply") {
+                p["item"] = Value::Null;
+            }
+            json!({"command": cmd, "params": p})
+        })
+        .collect();
+    // The engine names the failed step of its batch; the caller sent no batch, so the reply gives
+    // the step's own error.
+    let r = exec(b, "command.batch", json!({"label": label, "commands": commands})).map_err(|e| match e.split_once(" failed: ") {
+        Some((step, error)) if step.starts_with("batch step ") => error.to_string(),
+        _ => e,
+    })?;
+    let results = r.get("results").and_then(Value::as_array).ok_or("command.batch returned no results")?;
+    made["id"] = results.first().and_then(|r| r.get("id")).cloned().unwrap_or(Value::Null);
+    made["paint"] = Value::Object(applied);
+    if !effects.is_empty() {
+        made["effects"] = Value::Array(results.iter().skip(results.len().saturating_sub(effects.len())).cloned().collect());
+    }
+    Ok(made)
 }
 
 fn draw_path(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
@@ -544,28 +725,26 @@ fn draw_path(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
         p["anchors"] = Value::Array(anchors);
         p["closed"] = json!(a.get("closed").and_then(Value::as_bool).unwrap_or(false));
     }
-    let r = exec(b, "path.create", p)?;
-    let paint = apply_paint(b, a, created_id(&r))?;
-    Ok(json!({"id": r.get("id"), "paint": paint}))
+    draw(b, a, "Pen", ("path.create", p), json!({}))
 }
 
 fn draw_shape(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
     let shape = req_str(a, "shape")?;
-    let cmd = match shape {
-        "rectangle" | "rect" => "shape.rectangle",
-        "ellipse" | "circle" => "shape.ellipse",
-        "polygon" => "shape.polygon",
-        "star" => "shape.star",
-        "line" => "shape.line",
+    // Each command and the name of the undo step it makes.
+    let (cmd, label) = match shape {
+        "rectangle" | "rect" if a.get("radius").and_then(Value::as_f64).is_some_and(|r| r > 0.0) => ("shape.rectangle", "Rounded Rectangle"),
+        "rectangle" | "rect" => ("shape.rectangle", "Rectangle"),
+        "ellipse" | "circle" => ("shape.ellipse", "Ellipse"),
+        "polygon" => ("shape.polygon", "Polygon"),
+        "star" => ("shape.star", "Star"),
+        "line" => ("shape.line", "Line"),
         other => return Err(format!("unknown shape `{other}` (rectangle, ellipse, polygon, star, line)")),
     };
     let mut p = a.clone();
-    for k in ["shape", "fill", "stroke", "strokeWidth"] {
+    for k in ["shape", "fill", "stroke", "strokeWidth", "dash", "cap", "join", "opacity", "name", "effects"] {
         p.remove(k);
     }
-    let r = exec(b, cmd, Value::Object(p))?;
-    let paint = apply_paint(b, a, created_id(&r))?;
-    Ok(json!({"id": r.get("id"), "shape": shape, "paint": paint}))
+    draw(b, a, label, (cmd, Value::Object(p)), json!({"shape": shape}))
 }
 
 /// Select `ids` when given (tools that act on the selection).
@@ -579,7 +758,7 @@ fn select_ids(b: &mut dyn Backend, a: &Args) -> Result<(), String> {
 fn add_text(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
     let text = a.get("text").and_then(Value::as_str).ok_or("missing string argument `text`")?;
     let mut style = json!({});
-    for k in ["size", "font", "color"] {
+    for k in ["size", "font", "color", "justify", "vertical"] {
         if let Some(v) = a.get(k) {
             style[k] = v.clone();
         }
@@ -664,8 +843,13 @@ fn transform(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
 }
 
 fn screenshot(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
-    let path = a.get("path").and_then(Value::as_str);
+    let path = a.get("path").and_then(Value::as_str).map(|p| absolute_path(b, p)).transpose()?;
+    let path = path.as_deref();
     let window = a.get("window").and_then(Value::as_bool) == Some(true);
+    let max = max_side(a)?;
+    if max.is_some() && !window {
+        return Err("`max_side` applies to a window capture (`window: true`); size an artboard render with `scale`".into());
+    }
     // The backend writes the file, where its automation roots allow, and sends the image back too
     // (`data`): this process writes nothing.
     let mut p = json!({"data": true});
@@ -689,26 +873,60 @@ fn screenshot(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
         // (loopback: the same machine).
         None => match path {
             Some(path) => std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?,
-            None if window => return old_window_capture(b),
+            None if window => return old_window_capture(b, max),
             None => return Err("the renderer returned no image".into()),
         },
     };
-    let info = if window {
-        json!({"window": true, "width": r.get("width"), "height": r.get("height"), "path": path})
+    if window {
+        let mut info = json!({"window": true, "width": r.get("width"), "height": r.get("height"), "path": path});
+        let png = fit_capture(png, max, &mut info)?;
+        Ok(image_result(&png, info))
     } else {
-        json!({"width": r.get("width"), "height": r.get("height"), "path": path})
-    };
-    Ok(image_result(&png, info))
+        Ok(image_result(&png, json!({"width": r.get("width"), "height": r.get("height"), "path": path})))
+    }
 }
 
 /// The window of an app from before `ui.screenshot {data}`, captured through a temporary file.
-fn old_window_capture(b: &mut dyn Backend) -> Result<ToolResult, String> {
+fn old_window_capture(b: &mut dyn Backend, max: Option<u32>) -> Result<ToolResult, String> {
     let tmp = std::env::temp_dir().join(format!("vectorcraft-window-{}.png", std::process::id())).to_string_lossy().to_string();
     let r = b.call("ui.screenshot", json!({"path": tmp}))?;
     let png = std::fs::read(&tmp).map_err(|e| format!("read {tmp}: {e}"))?;
     // Best effort: a temporary file left behind is harmless.
     std::fs::remove_file(&tmp).ok();
-    Ok(image_result(&png, json!({"window": true, "width": r.get("width"), "height": r.get("height"), "path": Value::Null})))
+    let mut info = json!({"window": true, "width": r.get("width"), "height": r.get("height"), "path": Value::Null});
+    let png = fit_capture(png, max, &mut info)?;
+    Ok(image_result(&png, info))
+}
+
+/// `max_side`: absent, or an integer in 1..4096.
+fn max_side(a: &Args) -> Result<Option<u32>, String> {
+    match a.get("max_side") {
+        None => Ok(None),
+        Some(v) => Ok(Some(
+            v.as_u64().filter(|v| (1..=4096).contains(v)).and_then(|v| u32::try_from(v).ok()).ok_or("`max_side` must be an integer in 1..4096")?,
+        )),
+    }
+}
+
+/// A window capture with `max_side`: scaled down when its longer side is larger, with its own size
+/// in `capturedWidth` / `capturedHeight` and the returned image's in `width` / `height`. Without
+/// `max_side` the capture and `info` stay as they are.
+fn fit_capture(png: Vec<u8>, max: Option<u32>, info: &mut Value) -> Result<Vec<u8>, String> {
+    let Some(max) = max else { return Ok(png) };
+    let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| format!("read capture: {e}"))?;
+    info["capturedWidth"] = json!(img.width());
+    info["capturedHeight"] = json!(img.height());
+    if img.width().max(img.height()) <= max {
+        info["width"] = json!(img.width());
+        info["height"] = json!(img.height());
+        return Ok(png);
+    }
+    let img = img.thumbnail(max, max);
+    info["width"] = json!(img.width());
+    info["height"] = json!(img.height());
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).map_err(|e| format!("encode capture: {e}"))?;
+    Ok(out.into_inner())
 }
 
 fn image_result(png: &[u8], info: Value) -> ToolResult {
@@ -721,25 +939,55 @@ fn image_result(png: &[u8], info: Value) -> ToolResult {
     }
 }
 
+/// The `menu` argument of the command listings.
+const MENU_FILTER: &str = "Case-insensitive substring of the menu path, its levels joined with \" > \" (e.g. \"Object\", \"Object > Path\")";
+/// The `brief` argument of the command listings.
+const BRIEF: &str = "Leave out each command's params description (the bulk of the catalogue); run command_list with the id as filter to read it";
+/// The `max_side` argument of the window captures.
+const MAX_SIDE_WINDOW: &str =
+    "Window capture only: longest side of the returned image in pixels; a larger capture is scaled down to it (default: the full capture)";
+
+/// The command catalogue narrowed by the listing tools' arguments: `filter` (or `query`) on the
+/// id, label and menu path, `menu` on the menu path, `enabledOnly`, and `brief` (no `params`
+/// text: the full catalogue is too large for many clients, #2173).
 fn filter_commands(all: Value, a: &Args) -> Value {
-    let needle = a.get("filter").and_then(Value::as_str).map(str::to_lowercase).filter(|s| !s.is_empty());
+    let text = |k: &str| a.get(k).and_then(Value::as_str).map(str::to_lowercase).filter(|s| !s.is_empty());
+    let needle = text("filter").or_else(|| text("query"));
+    let in_menu = text("menu");
     let enabled_only = a.get("enabledOnly").and_then(Value::as_bool).unwrap_or(false);
+    let brief = a.get("brief").and_then(Value::as_bool).unwrap_or(false);
     let Value::Array(list) = all else { return all };
+    let menu_path = |c: &Value, sep: &str| {
+        c.get("menu")
+            .and_then(Value::as_array)
+            .map(|m| m.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(sep))
+            .unwrap_or_default()
+            .to_lowercase()
+    };
     let hit = |c: &Value| {
         if enabled_only && c.get("enabled").and_then(Value::as_bool) == Some(false) {
             return false;
         }
+        if let Some(m) = &in_menu
+            && !menu_path(c, " > ").contains(m.as_str())
+        {
+            return false;
+        }
         let Some(n) = &needle else { return true };
         let field = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").to_lowercase();
-        let menu = c
-            .get("menu")
-            .and_then(Value::as_array)
-            .map(|m| m.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "))
-            .unwrap_or_default()
-            .to_lowercase();
-        field("id").contains(n) || field("label").contains(n) || menu.contains(n)
+        field("id").contains(n.as_str()) || field("label").contains(n.as_str()) || menu_path(c, " ").contains(n.as_str())
     };
-    Value::Array(list.into_iter().filter(hit).collect())
+    Value::Array(
+        list.into_iter()
+            .filter(hit)
+            .map(|mut c| {
+                if brief && let Some(o) = c.as_object_mut() {
+                    o.remove("params");
+                }
+                c
+            })
+            .collect(),
+    )
 }
 
 fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<ToolResult, String> {
@@ -755,7 +1003,11 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<ToolResult, Str
         }
         "command_batch" => command_batch(b, a),
         "render_preview" => render_preview(b, a),
-        "ui_screenshot" => screenshot(b, &Map::from_iter([("window".into(), json!(true))])),
+        "ui_screenshot" => {
+            let mut args = a.clone();
+            args.insert("window".into(), json!(true));
+            screenshot(b, &args)
+        }
         "list_commands" => {
             let all = b.call("engine.commands", json!({}))?;
             let list = filter_commands(all, a);
@@ -772,9 +1024,9 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<ToolResult, Str
             j(b.call(method, json!({"command": cmd, "params": params}))?)
         }
         "doc_inspect" | "inspect_document" => {
-            // Only the slicing options reach the command, which validates them.
+            // Only the slicing and scope options reach the command, which validates them.
             let slice: Map<String, Value> =
-                a.iter().filter(|(k, _)| matches!(k.as_str(), "depth" | "childLimit")).map(|(k, v)| (k.clone(), v.clone())).collect();
+                a.iter().filter(|(k, _)| INSPECT_KEYS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
             j(b.call("document.inspect", Value::Object(slice))?)
         }
         "ui_inspect" | "inspect_ui" => {
@@ -816,8 +1068,14 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<ToolResult, Str
             if !["fill", "stroke", "strokeWidth"].iter().any(|k| a.contains_key(*k)) {
                 return Err("give at least one of `fill`, `stroke`, `strokeWidth`".into());
             }
-            let ids = a.get("ids").cloned();
-            j(json!({"applied": apply_paint(b, a, ids)?}))
+            let (applied, objects) = apply_paint(b, a, a.get("ids").cloned())?;
+            let mut reply = json!({"applied": applied, "objects": objects});
+            if objects == 0 {
+                reply["note"] = json!(
+                    "no object was painted (nothing selected, or `ids` is empty or holds no object this paint applies to): only the paint for new art changed"
+                );
+            }
+            j(reply)
         }
         "press_key" => {
             let mut p = json!({"key": req_str(a, "key")?});
@@ -837,8 +1095,31 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<ToolResult, Str
             j(b.call("ui.set", json!({"panel": req_str(a, "panel")?}))?)
         }
         "screenshot" => screenshot(b, a),
-        "open_file" => j(b.call("app.open", json!({"path": req_str(a, "path")?}))?),
-        "save_file" => j(b.call("app.save", json!({"path": a.get("path").and_then(Value::as_str)}))?),
+        "open_file" => {
+            let path = absolute_path(b, req_str(a, "path")?)?;
+            j(b.call("app.open", json!({"path": path}))?)
+        }
+        "save_file" => {
+            let mut p = json!({"path": a.get("path").and_then(Value::as_str).map(|p| absolute_path(b, p)).transpose()?});
+            for k in SAVE_FILE_OPTIONS {
+                if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
+                    p[k] = v.clone();
+                }
+            }
+            // The app writes the file before it replies, even with Background Save on, so a failed
+            // save is this call's error.
+            if b.has_ui() {
+                p["wait"] = json!(true);
+            }
+            let mut r = b.call("app.save", p)?;
+            let notes = save_file_warnings(a, r.get("format").and_then(Value::as_str));
+            if let Some(o) = r.as_object_mut().filter(|_| !notes.is_empty()) {
+                let mut all = o.get("warnings").and_then(Value::as_array).cloned().unwrap_or_default();
+                all.extend(notes.into_iter().map(Value::from));
+                o.insert("warnings".into(), Value::Array(all));
+            }
+            j(r)
+        }
         "export" => {
             // One params object for every backend; the named arguments win over `options` (a named
             // artboard or range replaces every artboard choice in `options`).
@@ -848,10 +1129,14 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<ToolResult, Str
                     params.remove(k);
                 }
             }
-            for k in ["path", "format", "scale", "artboard", "range", "outlineText"] {
-                if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
-                    params.insert(k.into(), v.clone());
+            for k in named_export_params(a) {
+                if let Some(v) = a.get(*k).filter(|v| !v.is_null()) {
+                    params.insert((*k).into(), v.clone());
                 }
+            }
+            if let Some(path) = params.get("path").and_then(Value::as_str) {
+                let path = absolute_path(b, path)?;
+                params.insert("path".into(), json!(path));
             }
             let cmd = if a.get("selection").and_then(Value::as_bool) == Some(true) { "document.exportSelection" } else { "document.export" };
             j(exec(b, cmd, Value::Object(params))?)
@@ -899,6 +1184,32 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<ToolResult, Str
     }
 }
 
+/// The named `export` arguments passed on to `document.export`. `scale` is raster pixels per
+/// point, so only a raster format gets it: DXF's own (drawing units per unit, given in `options`)
+/// would resize the drawing and leave its units unset.
+fn named_export_params(a: &Args) -> &'static [&'static str] {
+    let format = writable_format(a.get("format").and_then(Value::as_str), a.get("path").and_then(Value::as_str));
+    if format.is_ok_and(|f| f.raster) {
+        &["path", "format", "scale", "artboard", "range", "outlineText"]
+    } else {
+        &["path", "format", "artboard", "range", "outlineText"]
+    }
+}
+
+/// What `save_file` with arguments `a` adds to the save's `warnings`, for a file written in format
+/// `written` (none when nothing was written yet): each key in `options` that the format doesn't
+/// read. The save itself warns about `compress`, `version` and `preview` given at the top level.
+fn save_file_warnings(a: &Args, written: Option<&str>) -> Vec<String> {
+    let Some(f) = written.and_then(format) else { return vec![] };
+    let nested = a.get("options").and_then(Value::as_object);
+    nested
+        .into_iter()
+        .flatten()
+        .filter(|(key, v)| !v.is_null() && !save_reads_option(f, key))
+        .map(|(key, _)| format!("`options.{key}` was not used: {} files don't read it", f.label))
+        .collect()
+}
+
 /// Run one tool. Failures (unknown tool, bad arguments, command errors) come back as an
 /// `isError` result so the model can read and correct them.
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
@@ -915,8 +1226,28 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     }
 }
 
+/// Most steps one `command_batch` may hold, and most bytes its kept step results may total.
+/// Batches run sequentially and every result is kept for later steps' `"$N.path"` references, so
+/// without caps one batch could do unbounded work and pile up an unbounded reply (#1727).
+pub(crate) const MAX_COMMAND_BATCH_STEPS: usize = 256;
+pub(crate) const MAX_COMMAND_BATCH_BYTES: usize = 8 * 1024 * 1024;
+
+/// Refuses an argument the tool's schema doesn't list, as `tools/call` does (#713).
+pub(crate) fn check_tool_arguments(name: &str, args: &Args) -> Result<(), String> {
+    let defs = tool_definitions();
+    let props =
+        defs.iter().find(|t| t.get("name").and_then(Value::as_str) == Some(name)).and_then(|t| t.get("inputSchema")?.get("properties")?.as_object());
+    match props.and_then(|p| args.keys().find(|k| !p.contains_key(*k))) {
+        Some(key) => Err(format!("unknown argument `{key}` for `{name}`")),
+        None => Ok(()),
+    }
+}
+
 fn command_batch(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
     let steps = a.get("steps").and_then(Value::as_array).ok_or("`steps` must be an array")?;
+    if steps.len() > MAX_COMMAND_BATCH_STEPS {
+        return Err(format!("`steps` holds {} steps; at most {MAX_COMMAND_BATCH_STEPS}", steps.len()));
+    }
     let stop = match a.get("stop_on_error") {
         None => true,
         Some(v) => v.as_bool().ok_or("`stop_on_error` must be a boolean")?,
@@ -934,6 +1265,11 @@ fn command_batch(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
     let (mut completed, mut failed, mut results) = (0, 0, Vec::new());
     // Each step's result (null for a failed one), for later steps' `"$N.path"` references.
     let mut values: Vec<Value> = vec![];
+    // The kept results all go back in the reply, so their total size is capped: one batch can't
+    // pile up an unbounded answer (#1727).
+    let mut kept_bytes = 0usize;
+    // The objects the drawing steps made (#2113).
+    let mut created: Vec<Value> = vec![];
     for step in steps {
         let result = vectorcraft_engine::guard::catch_panic(|| {
             let args = step.as_object().ok_or("each step must be an object")?;
@@ -946,14 +1282,38 @@ fn command_batch(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
                 Some(v @ Value::Object(_)) => vectorcraft_engine::steps::resolve(v, &values)?,
                 Some(_) => return Err("`params` must be an object".into()),
             };
-            b.call("engine.execute", json!({"command":id,"params":params}))
+            match id {
+                // The drawing tools, with the arguments `tools/call` takes (#2113).
+                "draw_path" | "draw_shape" => {
+                    let args = params.as_object().cloned().unwrap_or_default();
+                    check_tool_arguments(id, &args)?;
+                    let made = if id == "draw_path" { draw_path(b, &args)? } else { draw_shape(b, &args)? };
+                    if let Some(new) = made.get("id").filter(|v| v.is_u64()) {
+                        created.push(new.clone());
+                    }
+                    Ok(made)
+                }
+                _ => b.call("engine.execute", json!({"command":id,"params":params})),
+            }
         })
         .unwrap_or_else(|e| Err(format!("internal error: {e}")));
         match result {
             Ok(v) => {
+                let entry = json!({"ok": true, "result": v});
+                let size = entry.to_string().len();
+                if kept_bytes.saturating_add(size) > MAX_COMMAND_BATCH_BYTES {
+                    // The results already kept stay; this step ran, and its result is replaced by
+                    // the reason the batch stops (saying it ran, so nobody runs it again). The loop breaks either way — carrying on would defeat the cap —
+                    // and the atomic group below still closes, as for any stopped batch.
+                    failed += 1;
+                    values.push(Value::Null);
+                    results.push(json!({"ok": false, "error": format!("this step ran, but the batch's results exceed {MAX_COMMAND_BATCH_BYTES} bytes: its result is dropped and the batch stops here")}));
+                    break;
+                }
+                kept_bytes += size;
                 completed += 1;
-                values.push(v.clone());
-                results.push(json!({"ok":true,"result":v}));
+                values.push(entry["result"].clone());
+                results.push(entry);
             }
             Err(e) => {
                 failed += 1;
@@ -969,16 +1329,13 @@ fn command_batch(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
     if atomic {
         b.call("engine.execute", json!({"command":"edit.undoGroup.end","params":{}}))?;
     }
-    let mut r = ToolResult::json(&json!({"completed":completed,"failed":failed,"results":results}));
+    let mut r = ToolResult::json(&json!({"completed":completed,"failed":failed,"results":results,"created":created}));
     r.is_error = failed > 0;
     Ok(r)
 }
 
 fn render_preview(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
-    let max = match a.get("max_side") {
-        None => 1024,
-        Some(v) => v.as_u64().filter(|v| (1..=4096).contains(v)).ok_or("`max_side` must be an integer in 1..4096")?,
-    };
+    let max = max_side(a)?.unwrap_or(1024);
     let index = match a.get("artboard") {
         None => 0,
         Some(v) => v.as_u64().ok_or("`artboard` must be a 0-based artboard index")?,
@@ -993,7 +1350,7 @@ fn render_preview(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
     }
     // The headless renderer clamps scale at 0.01. Bound its allocation even for
     // a huge artboard, then downsize to the requested dimensions.
-    let scale = (max as f64 / width.max(height)).clamp(0.01, 1.0);
+    let scale = (f64::from(max) / width.max(height)).clamp(0.01, 1.0);
     if width.max(height) * scale > 4096.0 {
         return Err("artboard is too large for a bounded preview".into());
     }
@@ -1001,7 +1358,7 @@ fn render_preview(b: &mut dyn Backend, a: &Args) -> Result<ToolResult, String> {
     let encoded = r.get("pngBase64").and_then(Value::as_str).ok_or("renderer returned no image")?;
     let png = vectorcraft_format::base64_decode(encoded).ok_or("renderer returned bad base64")?;
     let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| format!("read preview: {e}"))?;
-    let img = img.thumbnail(max as u32, max as u32);
+    let img = if img.width() > max || img.height() > max { img.thumbnail(max, max) } else { img };
     let mut out = std::io::Cursor::new(Vec::new());
     img.write_to(&mut out, image::ImageFormat::Png).map_err(|e| format!("encode preview: {e}"))?;
     Ok(image_result(out.get_ref(), json!({"width":img.width(),"height":img.height()})))

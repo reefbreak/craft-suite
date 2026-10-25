@@ -1,6 +1,7 @@
 //! Shaper compositions are groups of generated fills/strokes with transparent, editable source
 //! art retained underneath. Recipes select topology regions; source edits re-evaluate them in
 //! the same undo transaction. Rendering and exporters only see ordinary groups and paths.
+use super::pathops::Beside;
 use super::*;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
@@ -8,7 +9,7 @@ use vectorcraft_doc::shaper::{EdgeEdit, FILL_PREFIX, FaceEdit, FaceSelector, SOU
 use vectorcraft_doc::{Appearance, AppearanceItem, Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::{FillRule, PathData, Point, Rect, Shape as _};
 use vectorcraft_pathops as po;
-use vectorcraft_tools::builder::{self as b, BuilderMap, Hit};
+use vectorcraft_tools::builder::{self as b, BuilderMap};
 
 const MAX_SOURCES: usize = 64;
 const MAX_POINTS: usize = 4096;
@@ -30,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select Shaper Face",
             [],
             None,
-            "{point: [x,y], source?: bool} click selects a group, then a face; source enters construction isolation and selects an original → {id}",
+            "{point: [x,y], source?: bool} click selects a group, then a face; source enters construction isolation and selects an original; while a group's originals are isolated, it selects one of that group's originals → {id}",
             has_doc,
             select
         ),
@@ -89,9 +90,13 @@ fn map_of(src: &[Arc<Node>]) -> Result<BuilderMap> {
     }
     let arrangement = po::shape_builder(&shapes, true);
     let bounded = |pieces: Vec<po::Shape>| pieces.into_iter().filter_map(|p| p.path.bounds().map(|b| (p, b))).collect();
+    // A Shaper Group's faces are what its shapes fill and what its open paths enclose: the gaps
+    // closed paths enclose are the Shape Builder's only.
+    let open = po::has_open_path(&shapes);
     let regions = arrangement
         .regions
         .into_iter()
+        .filter(|r| open || !r.sources.is_empty())
         .filter_map(|r| {
             let bounds = r.path.bounds()?;
             let path = r.path.to_bezpath();
@@ -380,7 +385,10 @@ pub(crate) fn refresh(before: &Document, d: &mut Document) -> Result<()> {
             ids.push(n.id)
         }
     });
-    for id in ids {
+    // Groups whose source art is all gone are removed through `emptied`, which is made when the
+    // first one is found.
+    let mut emptied: Option<Beside> = None;
+    for &id in &ids {
         let Some(current) = d.node(id).cloned() else { continue };
         let Some(old) = before.node(id) else { continue };
         let src = sources(&current);
@@ -395,7 +403,7 @@ pub(crate) fn refresh(before: &Document, d: &mut Document) -> Result<()> {
             continue;
         }
         if src.is_empty() {
-            d.remove(id)?;
+            emptied.get_or_insert_with(|| Beside::replacing(d, &ids)).put(d, id, vec![])?;
             continue;
         }
         let map = map_of(&src)?;
@@ -494,7 +502,7 @@ pub(crate) fn refresh(before: &Document, d: &mut Document) -> Result<()> {
             *ch = children;
         }
     }
-    Ok(())
+    emptied.map_or(Ok(()), |e| e.finish(d))
 }
 
 fn candidates(s: &Session, p: &Value, points: &[Point], tolerance: f64) -> Result<Vec<NodeId>> {
@@ -503,10 +511,11 @@ fn candidates(s: &Session, p: &Value, points: &[Point], tolerance: f64) -> Resul
     let supplied = p.get("ids").map(|_| checked_ids_param(s, p, "ids", "shaper.scribble")).transpose()?;
     let expand = supplied.is_none() && st.selection.objects.len() < 2;
     let ids = supplied.unwrap_or_else(|| if st.selection.objects.len() > 1 { st.selection.objects.clone() } else { st.doc.selectable_art() });
+    let editable = st.doc.editable();
     let eligible: Vec<NodeId> = ids
         .into_iter()
         .filter(|id| {
-            st.doc.is_editable(*id)
+            editable(*id)
                 && st.doc.node(*id).is_some_and(|n| {
                     !matches!(n.kind, NodeKind::Path { guide: true, .. } | NodeKind::Path { clipping: true, .. })
                         && (n.extras().shaper.is_some() || b::node_outline(n).is_some())
@@ -608,8 +617,9 @@ fn scribble(s: &mut Session, p: &Value) -> Result<Value> {
     let edits = face_edits(&map, &src, &spec);
     let filled = |i: usize| edits.get(&i).is_none_or(|e| !e.erase) && map.regions.get(i).and_then(|r| fill_source(&src, &r.0)).is_some();
     let components = visible_components(&map, &src, &edits);
+    // Every face the scribble crosses, however narrow.
     let faces: std::collections::BTreeSet<usize> =
-        points.iter().filter_map(|p| map.region_at(*p)).filter(|i| filled(*i)).filter_map(|i| components.get(i).copied()).collect();
+        map.hits_along(&pts, None).regions.into_iter().filter(|i| filled(*i)).filter_map(|i| components.get(i).copied()).collect();
     let touched: Vec<usize> = components.iter().enumerate().filter(|(_, c)| faces.contains(c)).map(|(i, _)| i).collect();
     let first = points.first().copied().unwrap_or(Point::ZERO);
     let last = points.last().copied().unwrap_or(first);
@@ -633,19 +643,12 @@ fn scribble(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut strokes = 0;
     if touched.is_empty() {
-        let mut piece_ids = vec![];
+        // Every stroke the scribble crosses or passes within `tolerance` of, however small that is.
+        let mut hits = map.hits_along(&pts, Some(tolerance));
         for point in &points {
-            let index = match map.hit(*point, Some(tolerance)) {
-                Some(Hit::Line(i)) => Some(map.edges.len() + i),
-                Some(Hit::Edge(i)) => Some(i),
-                _ => None,
-            };
-            if let Some(i) = index
-                && !piece_ids.contains(&i)
-            {
-                piece_ids.push(i);
-            }
+            hits.add(map.hit(*point, Some(tolerance)));
         }
+        let piece_ids = hits.edges.iter().copied().chain(hits.lines.iter().map(|i| map.edges.len() + i));
         for i in piece_ids {
             if let Some(e) = pieces(&map).get(i).and_then(|p| edge_selector(&map, &src, p)) {
                 spec.edges.push(e);
@@ -670,9 +673,7 @@ fn scribble(s: &mut Session, p: &Value) -> Result<Value> {
         let mut group = Node::group(id, children);
         group.name = Some("Shaper Group".into());
         group.extras_mut().shaper = Some(Box::new(spec));
-        for id in &roots {
-            d.remove(*id)?;
-        }
+        d.remove_many(&roots)?;
         d.insert(parent, index.saturating_sub(earlier), group)?;
         sel.set([id]);
         Ok(id)
@@ -681,11 +682,15 @@ fn scribble(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": id.0, "regions": touched.len(), "strokes": strokes}))
 }
 
-fn group_at(d: &Document, point: Point, construction: bool) -> Option<NodeId> {
+/// The topmost editable Shaper Group at `point`, measured by its source shapes in `construction`.
+/// When `within` is given, only that group is considered.
+fn group_at(d: &Document, point: Point, construction: bool, within: Option<NodeId>) -> Option<NodeId> {
     let mut groups = vec![];
+    let editable = d.editable();
     d.walk(|n| {
         if n.extras().shaper.is_some()
-            && d.is_editable(n.id)
+            && within.is_none_or(|g| g == n.id)
+            && editable(n.id)
             && (if construction { source_group(n).and_then(Node::geometric_bounds) } else { n.geometric_bounds() })
                 .is_some_and(|b| b.inflate(6.0, 6.0).contains(point))
         {
@@ -698,7 +703,10 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     let point = point_param(p, "point").filter(|p| finite(*p)).ok_or_else(|| bad("shaper.select", "missing point"))?;
     let st = s.doc()?;
     let source = bool_or(p, "source", false);
-    let Some(group) = group_at(&st.doc, point, source) else { return Ok(json!({"id": null})) };
+    // In Construction mode a source pick stays in the group whose source shapes are isolated.
+    let isolated =
+        st.isolation.and_then(|i| st.doc.parent_of(i)).filter(|g| st.doc.node(*g).and_then(source_group).is_some_and(|s| st.isolation == Some(s.id)));
+    let Some(group) = group_at(&st.doc, point, source, isolated.filter(|_| source)) else { return Ok(json!({"id": null})) };
     let node = st.doc.node(group).ok_or(EngineError::NoNode(group))?;
     let target = if source {
         sources(node)

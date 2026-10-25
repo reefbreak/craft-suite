@@ -4,7 +4,6 @@
 //! Every operation counts against a budget and procedures nest only so deep, so a looping or
 //! recursing program ends with [`PsError::Limit`] instead of hanging.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use vectorcraft_geom::Affine;
@@ -30,6 +29,8 @@ pub(crate) const MAX_GSAVE: usize = 1000;
 const MAX_MEMORY: usize = 1 << 30;
 
 pub(crate) struct Interp<'a> {
+    /// The list of the arrays and dictionaries made since this started ([`super::obj::track`]).
+    made: u64,
     pub lex: Lexer<'a>,
     pub stack: Vec<Obj>,
     pub dicts: Vec<DictRef>,
@@ -86,7 +87,7 @@ struct SaveMark {
 }
 
 fn new_dict() -> DictRef {
-    Rc::new(RefCell::new(Dict::new()))
+    DictRef::new(Dict::new())
 }
 
 /// An encoding vector: 256 `/.notdef` names (type is read as Latin-1 whatever the encoding).
@@ -102,6 +103,7 @@ const CATEGORIES: &str = "Category Generic Font CIDFont CMap FontSet Encoding Fo
 
 impl<'a> Interp<'a> {
     pub fn new(src: &'a [u8], g: GState, out: Out) -> Self {
+        let made = super::obj::track();
         let system = new_dict();
         {
             let mut d = system.borrow_mut();
@@ -141,6 +143,7 @@ impl<'a> Interp<'a> {
             system.borrow_mut().insert(Key::name(name), Obj::Dict(d.clone()));
         }
         Self {
+            made,
             lex: Lexer::new(src),
             stack: vec![],
             dicts: vec![system.clone(), global.clone(), user.clone()],
@@ -206,6 +209,8 @@ impl<'a> Interp<'a> {
         self.dicts.clear();
         self.stack.clear();
         self.journal.clear();
+        // What the program linked into itself, reachable or not.
+        super::obj::release_tracked(self.made);
     }
 
     // ---------- the operand stack ----------
@@ -376,7 +381,13 @@ impl<'a> Interp<'a> {
                 None => Ok(()),
             },
             Obj::ExecStr(s) => self.run_program(&s.to_vec()),
-            Obj::Op(op) => self.op(op),
+            // Through the depth guard: `stopped` and the like call back into here.
+            Obj::Op(op) => {
+                self.enter()?;
+                let r = self.op(op);
+                self.depth -= 1;
+                r
+            }
             Obj::Exec(name) => {
                 self.enter()?;
                 let r = match self.lookup(&name) {
@@ -562,11 +573,15 @@ impl<'a> Interp<'a> {
                     None => {
                         let (x, y) =
                             (a.as_num().ok_or(PsError::Ps("typecheck", String::new()))?, b.as_num().ok_or(PsError::Ps("typecheck", String::new()))?);
-                        Obj::Real(match op {
+                        let r = match op {
                             Add => x + y,
                             Sub => x - y,
                             _ => x * y,
-                        })
+                        };
+                        if !r.is_finite() {
+                            return ps_err("undefinedresult", "");
+                        }
+                        Obj::Real(r)
                     }
                 };
                 self.push(r)?;
@@ -810,6 +825,8 @@ impl<'a> Interp<'a> {
             }
             Cvn => {
                 let s = self.pop_str()?;
+                // The name is a copy of the string (a bigger one when bytes are replaced).
+                self.alloc(s.len().saturating_mul(3))?;
                 let n: Rc<str> = Rc::from(String::from_utf8_lossy(&s.borrow()).as_ref());
                 self.push(Obj::Name(n))?;
             }
@@ -942,6 +959,7 @@ impl<'a> Interp<'a> {
                 let seek = self.pop_str()?.to_vec();
                 let s = self.pop_str()?;
                 let text = s.to_vec();
+                self.spend((text.len() / 64) as u64)?;
                 let at = if op == Search { super::lex::find(&text, &seek) } else { text.starts_with(&seek).then_some(0) };
                 match at {
                     Some(i) => {
@@ -1045,7 +1063,7 @@ impl<'a> Interp<'a> {
             Bind => {
                 let o = self.pop()?;
                 if let Obj::Array { items, .. } = &o {
-                    self.bind(items, 0);
+                    self.bind(items, 0)?;
                 }
                 self.push(o)?;
             }
@@ -1161,7 +1179,11 @@ impl<'a> Interp<'a> {
                 }
             }
             Obj::Array { items, exec } => {
-                let from = self.pop_array()?.to_vec();
+                let source = self.pop_array()?;
+                // Its elements are read and written: work in proportion, and a copy held meanwhile.
+                self.spend(source.len() as u64)?;
+                self.alloc(source.len().saturating_mul(std::mem::size_of::<Obj>()))?;
+                let from = source.to_vec();
                 if !items.write(0, &from) {
                     return ps_err("rangecheck", "copy");
                 }
@@ -1236,11 +1258,13 @@ impl<'a> Interp<'a> {
 
     /// Replace the names in a procedure that stand for operators by the operators, down through
     /// nested procedures.
-    fn bind(&mut self, items: &Shared<Obj>, depth: u32) {
+    fn bind(&mut self, items: &Shared<Obj>, depth: u32) -> Res {
         if depth > 64 {
-            return;
+            return Ok(());
         }
         for i in 0..items.len() {
+            // Procedures that hold one another twice would be visited exponentially often.
+            self.tick()?;
             match items.get(i) {
                 Some(Obj::Exec(name)) => {
                     if let Some(o @ Obj::Op(_)) = self.lookup(&name) {
@@ -1248,10 +1272,11 @@ impl<'a> Interp<'a> {
                         items.write(i, &[o]);
                     }
                 }
-                Some(Obj::Array { items: inner, exec: true }) if !inner.shares(items) => self.bind(&inner, depth + 1),
+                Some(Obj::Array { items: inner, exec: true }) if !inner.shares(items) => self.bind(&inner, depth + 1)?,
                 _ => {}
             }
         }
+        Ok(())
     }
 
     /// Put `v` under `k` in `d` (`None`: remove it), within [`MAX_ALLOC`] entries; while a `save`

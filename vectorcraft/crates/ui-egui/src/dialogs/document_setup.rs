@@ -78,6 +78,7 @@ fn unit(d: &Dialog) -> Unit {
     Unit::named(&d.str("units")).unwrap_or_default()
 }
 
+/// The General tab of Document Setup (units, bleed, artboard editing, options).
 fn general(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
     let units: Vec<(&str, &str)> = Unit::ALL.iter().map(|u| (u.label(), u.label())).collect();
     choice(ui, d, "units", tl!("Units:"), &units);
@@ -88,7 +89,7 @@ fn general(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool 
     let mut close = false;
     widgets::label_row(ui, "", LABEL, |ui| {
         // Applies the settings, then edits the artboards with the Artboard tool.
-        if widgets::flat_button(ui, tl!("Edit Artboards"), 120.0).clicked() && confirm(app, d).is_ok() {
+        if widgets::flat_button_fit(ui, tl!("Edit Artboards"), 120.0).clicked() && confirm(app, d).is_ok() {
             app.select_tool("artboard");
             // The shared frame restores its working copy after drawing the body. Tell it to
             // close too, otherwise it reopens the dialog that confirm just closed.
@@ -132,7 +133,8 @@ fn transparency(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 ui.painter().rect_filled(chip, 2.0, crate::panels::c32(&c));
             }
             ui.painter().rect_stroke(chip, 2.0, egui::Stroke::new(1.0, t.input_border), egui::StrokeKind::Inside);
-            if let Some(c) = widgets::hex_field(ui, ("grid-color", i), hex).and_then(|h| vectorcraft_color::Color::from_hex(&h)) {
+            let name = format!("{} {}", tl!("Grid Colors:"), i + 1);
+            if let Some(c) = widgets::hex_field_named(ui, ("grid-color", i), Some(&name), hex).and_then(|h| vectorcraft_color::Color::from_hex(&h)) {
                 let mut v = colors.clone();
                 v.resize(2, "#ffffff".into());
                 v[i] = c.to_hex();

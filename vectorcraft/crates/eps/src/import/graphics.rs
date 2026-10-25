@@ -15,7 +15,7 @@ use vectorcraft_doc::{Appearance, AppearanceItem, Dash, Document, FillLayer, Lin
 use vectorcraft_geom::{Affine, BezPath, FillRule, PathData, Point, Rect, Vec2};
 
 use super::interp::{Interp, MAX_GSAVE, matrix_obj};
-use super::obj::{DictRef, Key, Obj, Op, PsError, Res, Shared, ps_err};
+use super::obj::{DictRef, Key, Obj, Op, PsError, Res, Shared, clamp_between, ps_err};
 
 /// Most objects one file makes.
 const MAX_NODES: usize = 1 << 20;
@@ -39,8 +39,9 @@ const MAX_PATH: usize = 1 << 20;
 const MAX_DRAWN: usize = 1 << 24;
 /// Samples taken of a shading function that isn't a plain interpolation.
 const SHADING_SAMPLES: usize = 32;
-/// Most bounds of a stitched linear function that become a gradient's stops: past it, the
-/// function is sampled like any other (each stop evaluates the whole function).
+/// Most bounds of a stitched linear function that become a gradient's stops (two where the pieces
+/// don't meet): past it, the function is sampled like any other (each stop evaluates the whole
+/// function).
 const MAX_STITCH_STOPS: usize = 1024;
 /// Most functions one evaluation of a shading's function visits: the function itself, each entry
 /// of an array of functions and, in each stitching function, the piece that applies to the input.
@@ -366,9 +367,9 @@ impl Out {
     /// A new clip of `path` inside `clips`; `None` for a rectangle around the whole page, which
     /// clips nothing.
     fn clip(&mut self, path: BezPath, rule: FillRule) -> Option<Arc<Clip>> {
-        let lines = path.elements().iter().all(|e| !matches!(e, PathEl::QuadTo(..) | PathEl::CurveTo(..)));
-        let around = path.bounding_box().inflate(0.5, 0.5);
-        if lines && path.elements().len() <= 6 && around.contains(self.frame.origin()) && around.contains(Point::new(self.frame.x1, self.frame.y1)) {
+        // Only a polygon that really covers the page: a diamond touching its edges has the page as
+        // its bounding box but cuts its corners away (#1542).
+        if path.elements().len() <= 6 && vectorcraft_geom::hit::polygon_covers_rect(&path, self.frame, 0.5) {
             return None;
         }
         self.next_clip += 1;
@@ -1098,7 +1099,9 @@ impl Interp<'_> {
         // Where the colour changes: the ends, and the bounds of stitched linear functions (unless
         // there are too many).
         let mut visits = 0;
-        let ts: Vec<f64> = match linear_points(&f, 0, &mut visits).filter(|p| p.len() <= MAX_STITCH_STOPS) {
+        let points = linear_points(&f, 0, &mut visits).filter(|p| p.len() <= MAX_STITCH_STOPS);
+        let stitched = points.is_some();
+        let ts: Vec<f64> = match points {
             Some(mut pts) => {
                 pts.retain(|t| (d0.min(d1)..=d0.max(d1)).contains(t));
                 pts.iter().map(|t| if d1 != d0 { (t - d0) / (d1 - d0) } else { 0.0 }).chain([0.0, 1.0]).collect()
@@ -1112,15 +1115,25 @@ impl Interp<'_> {
         let c = |i: usize| coords.get(i).copied().unwrap_or(0.0);
         let (r0, r1) = (c(2).max(0.0), c(5).max(1e-6));
         let mut stops = Vec::with_capacity(ts.len());
+        let stop = |paint: Paint, offset: f64| match paint {
+            Paint::Solid { color, swatch, tint } => GradientStop { swatch, tint, ..GradientStop::new(offset as f32, color) },
+            _ => GradientStop::new(offset as f32, Color::BLACK),
+        };
         for t in ts {
             let comps = self.eval(&f, &[d0 + (d1 - d0) * t], 0)?;
             let paint = self.paint_of(&space, &comps)?;
             let offset = if radial { (r0 + (r1 - r0) * t) / r1 } else { t };
-            let stop = match paint {
-                Paint::Solid { color, swatch, tint } => GradientStop { swatch, tint, ..GradientStop::new(offset as f32, color) },
-                _ => GradientStop::new(offset as f32, Color::BLACK),
-            };
-            stops.push(stop);
+            // At a bound of a stitched function the pieces need not meet (a hard colour change):
+            // the colour just before the bound is a stop at the same offset, ahead of the one
+            // after it.
+            if stitched && t > 0.0 && t < 1.0 {
+                let comps = self.eval(&f, &[d0 + (d1 - d0) * (t - 1e-9)], 0)?;
+                let before = stop(self.paint_of(&space, &comps)?, offset);
+                if before.color != stop(paint.clone(), offset).color {
+                    stops.push(before);
+                }
+            }
+            stops.push(stop(paint, offset));
         }
         let (gk, geom) = if radial {
             let centre = Point::new(c(3), c(4));
@@ -1131,7 +1144,7 @@ impl Interp<'_> {
         } else {
             (GradientKind::Linear, GradientGeom { start: m * Point::new(c(0), c(1)), end: m * Point::new(c(2), c(3)), aspect: 1.0, focal: None })
         };
-        let mut g = GradientPaint::new(Gradient { kind: gk, stops });
+        let mut g = GradientPaint::new(Gradient::new(gk, stops));
         g.geom = Some(geom);
         Ok(Some(g))
     }
@@ -1179,7 +1192,7 @@ impl Interp<'_> {
         let domain = nums(get("Domain"));
         let t = x.first().copied().unwrap_or(0.0);
         let t = match domain.as_slice() {
-            [a, b, ..] => t.clamp(a.min(*b), a.max(*b)),
+            [a, b, ..] => clamp_between(t, *a, *b),
             _ => t,
         };
         match get("FunctionType").and_then(|o| o.as_num()) {
@@ -1317,11 +1330,13 @@ impl Interp<'_> {
             }
             GStateNew => {
                 self.spend_elements(self.g.path.elements().len())?;
+                self.alloc(std::mem::size_of_val(self.g.path.elements()))?;
                 self.push(Obj::GState(Rc::new(self.g.clone())))?;
             }
             CurrentGState => {
                 self.pop()?;
                 self.spend_elements(self.g.path.elements().len())?;
+                self.alloc(std::mem::size_of_val(self.g.path.elements()))?;
                 self.push(Obj::GState(Rc::new(self.g.clone())))?;
             }
             SetGState => match self.pop()? {

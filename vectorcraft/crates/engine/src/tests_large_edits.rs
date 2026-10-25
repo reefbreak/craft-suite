@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use vectorcraft_doc::{Appearance, Document, Node, NodeId, NodeKind};
+use vectorcraft_doc::{Appearance, Document, LAYER_COLORS, LayerColor, Node, NodeId, NodeKind};
 use vectorcraft_geom::{FillRule, Rect, shapes};
 use vectorcraft_tools::{Mods, PointerEvent, PointerKind};
 
@@ -22,13 +22,13 @@ fn square_at(k: usize) -> Rect {
 }
 
 /// Square `k` ([`square_at`]) as a path with a new id.
-fn square(d: &mut Document, k: usize) -> Node {
+pub(crate) fn square(d: &mut Document, k: usize) -> Node {
     Node::path(d.alloc_id(), shapes::rectangle(square_at(k)), Appearance::default_art())
 }
 
 /// A session whose document holds `make(d, k)` for each `k` below `n` on its one layer, all of it
 /// selected.
-fn session(n: usize, mut make: impl FnMut(&mut Document, usize) -> Node) -> Session {
+pub(crate) fn session(n: usize, mut make: impl FnMut(&mut Document, usize) -> Node) -> Session {
     let mut d = Document::new(ROW as f64 * 20.0, (n / ROW + 1) as f64 * 20.0);
     let art: Vec<Arc<Node>> = (0..n).map(|k| Arc::new(make(&mut d, k))).collect();
     if let Some(ch) = Arc::make_mut(&mut d.layers[0]).children_mut() {
@@ -46,7 +46,7 @@ fn ids_of(n: &Node) -> Vec<NodeId> {
 }
 
 /// The ids of the objects on layer `i`.
-fn layer(s: &Session, i: usize) -> Vec<NodeId> {
+pub(crate) fn layer(s: &Session, i: usize) -> Vec<NodeId> {
     ids_of(&s.doc().unwrap().doc.layers[i])
 }
 
@@ -66,7 +66,7 @@ fn in_turn(a: &[NodeId], b: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// Runs `f` on `s` on a thread of its own and fails the test when it takes more than 20 s.
-fn soon<T: Send + 'static>(mut s: Session, what: &'static str, f: impl FnOnce(&mut Session) -> T + Send + 'static) -> (Session, T) {
+pub(crate) fn soon<T: Send + 'static>(mut s: Session, what: &'static str, f: impl FnOnce(&mut Session) -> T + Send + 'static) -> (Session, T) {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let r = f(&mut s);
@@ -76,7 +76,7 @@ fn soon<T: Send + 'static>(mut s: Session, what: &'static str, f: impl FnOnce(&m
 }
 
 /// Runs command `cmd` with `params` through [`soon`] and returns its result.
-fn run_soon(s: Session, cmd: &'static str, params: Value) -> (Session, Value) {
+pub(crate) fn run_soon(s: Session, cmd: &'static str, params: Value) -> (Session, Value) {
     let (s, r) = soon(s, cmd, move |s| s.execute(cmd, &params));
     (s, r.unwrap())
 }
@@ -87,7 +87,7 @@ fn ids_in(r: &Value) -> Vec<NodeId> {
 }
 
 /// Runs Undo and checks that it gives back `before`.
-fn undo_gives_back(s: &mut Session, before: &Document) {
+pub(crate) fn undo_gives_back(s: &mut Session, before: &Document) {
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(*s.doc().unwrap().doc == *before, "Undo gives back the document");
 }
@@ -107,6 +107,28 @@ fn delete_of_100000_objects_finishes_within_20_s() {
     let s = session(100_000, square);
     let before = s.doc().unwrap().doc.clone();
     let (mut s, _) = run_soon(s, "edit.clear", json!({}));
+    assert!(layer(&s, 0).is_empty());
+    assert!(selected(&s, &[]));
+    undo_gives_back(&mut s, &before);
+}
+
+#[test]
+fn delete_selection_of_100000_rows_finishes_within_20_s() {
+    let s = session(100_000, square);
+    let (before, ids) = (s.doc().unwrap().doc.clone(), layer(&s, 0));
+    let (mut s, r) = run_soon(s, "layer.delete", json!({"ids": ids}));
+    assert_eq!(r["deleted"], json!(100_000));
+    assert!(layer(&s, 0).is_empty());
+    assert!(selected(&s, &[]));
+    undo_gives_back(&mut s, &before);
+}
+
+#[test]
+fn clean_up_of_100000_unpainted_paths_finishes_within_20_s() {
+    let s = session(100_000, |d, k| Node::path(d.alloc_id(), shapes::rectangle(square_at(k)), Appearance::default()));
+    let before = s.doc().unwrap().doc.clone();
+    let (mut s, r) = run_soon(s, "object.path.cleanUp", json!({}));
+    assert_eq!(r["removed"], json!(100_000));
     assert!(layer(&s, 0).is_empty());
     assert!(selected(&s, &[]));
     undo_gives_back(&mut s, &before);
@@ -185,6 +207,21 @@ fn transform_each_with_copy_of_50000_objects_finishes_within_20_s() {
 }
 
 #[test]
+fn offset_path_of_50000_objects_finishes_within_20_s() {
+    let s = session(50_000, square);
+    let (before, ids, first) = (s.doc().unwrap().doc.clone(), layer(&s, 0), s.doc().unwrap().doc.peek_next_id());
+    let (mut s, r) = run_soon(s, "object.path.offsetPath", json!({"offset": 1}));
+    // Each offset path goes directly above its square and takes the next id, in the squares' order.
+    let offsets = ids_from(first, ids.len());
+    assert!(ids_in(&r) == offsets);
+    assert!(layer(&s, 0) == in_turn(&ids, &offsets), "each offset path directly above its square");
+    assert!(selected(&s, &offsets));
+    let grown = bounds(&s, offsets[1]);
+    assert!((grown.width() - 12.0).abs() < 1e-6 && (grown.x0 - 19.0).abs() < 1e-6, "{grown:?}");
+    undo_gives_back(&mut s, &before);
+}
+
+#[test]
 fn compound_path_of_100000_objects_finishes_within_20_s() {
     let s = session(100_000, square);
     let (before, ids) = (s.doc().unwrap().doc.clone(), layer(&s, 0));
@@ -207,6 +244,34 @@ fn send_to_current_layer_of_100000_objects_finishes_within_20_s() {
     let (mut s, _) = run_soon(s, "object.arrange.sendToCurrentLayer", json!({}));
     assert!(layer(&s, 0).is_empty());
     assert!(children(&s, to) == ids, "the layer holds the objects in their order");
+    assert!(selected(&s, &ids));
+    undo_gives_back(&mut s, &before);
+}
+
+#[test]
+fn row_drag_of_100000_rows_finishes_within_20_s() {
+    let mut s = session(100_000, square);
+    let ids = layer(&s, 0);
+    let to = NodeId(s.execute("layer.new", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let before = s.doc().unwrap().doc.clone();
+    let (mut s, r) = run_soon(s, "layer.move", json!({"ids": ids, "target": to}));
+    assert!(ids_in(&r) == ids);
+    assert!(layer(&s, 0).is_empty());
+    assert!(children(&s, to) == ids, "the layer holds the rows in their order");
+    assert!(selected(&s, &ids));
+    undo_gives_back(&mut s, &before);
+}
+
+#[test]
+fn merge_selected_of_100000_objects_finishes_within_20_s() {
+    let mut s = session(100_000, square);
+    let (from, ids) = (s.doc().unwrap().doc.layers[0].id, layer(&s, 0));
+    let into = NodeId(s.execute("layer.new", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let before = s.doc().unwrap().doc.clone();
+    let (mut s, r) = run_soon(s, "layer.merge", json!({"ids": [from, into]}));
+    assert_eq!(r["id"], json!(into));
+    assert!(s.doc().unwrap().doc.node(from).is_none(), "the emptied layer goes");
+    assert!(children(&s, into) == ids, "the layer holds the objects in their order");
     assert!(selected(&s, &ids));
     undo_gives_back(&mut s, &before);
 }
@@ -237,6 +302,45 @@ fn compound_path_release_of_25000_compound_paths_finishes_within_20_s() {
     let (mut s, _) = run_soon(s, "object.compoundPath.release", json!({}));
     assert!(layer(&s, 0) == paths, "each compound path's paths where it was");
     assert!(selected(&s, &paths));
+    undo_gives_back(&mut s, &before);
+}
+
+#[test]
+fn release_to_layers_of_100000_objects_finishes_within_20_s() {
+    let s = session(100_000, square);
+    let doc = &s.doc().unwrap().doc;
+    let (before, l, ids, first) = (doc.clone(), doc.layers[0].id, layer(&s, 0), doc.peek_next_id());
+    let (mut s, r) = run_soon(s, "layer.releaseToLayers", json!({"id": l}));
+    // Each object goes into a sublayer of its own, in their order. The sublayers take the next ids,
+    // and with Layer 1 counted, sublayer k is named `Layer k + 2` and takes layer color k + 1,
+    // wrapping around after the last preset.
+    let subs = ids_from(first, ids.len());
+    assert!(ids_in(&r) == subs);
+    assert!(layer(&s, 0) == subs);
+    let doc = &s.doc().unwrap().doc;
+    for (k, (sub, id)) in subs.iter().zip(&ids).enumerate() {
+        let n = doc.node(*sub).unwrap();
+        assert_eq!(ids_of(n), [*id]);
+        assert_eq!(n.name.as_deref(), Some(format!("Layer {}", k + 2).as_str()));
+        assert!(matches!(n.kind, NodeKind::Layer { color: LayerColor::Preset(c), .. } if usize::from(c) == (k + 1) % LAYER_COLORS.len()));
+    }
+    assert!(selected(&s, &ids));
+    undo_gives_back(&mut s, &before);
+}
+
+#[test]
+fn outline_stroke_of_25000_objects_finishes_within_20_s() {
+    let s = session(25_000, square);
+    let (before, first) = (s.doc().unwrap().doc.clone(), s.doc().unwrap().doc.peek_next_id());
+    let (mut s, r) = run_soon(s, "object.path.outlineStroke", json!({}));
+    // Each square, filled and stroked, becomes a group of its fill and the outline of its stroke,
+    // where the square was, and the groups take new ids in the squares' order.
+    let groups = ids_in(&r);
+    assert_eq!(groups.len(), 25_000);
+    assert!(layer(&s, 0) == groups, "each group where its square was");
+    assert!(groups[0].0 >= first && groups.windows(2).all(|w| w[0] < w[1]));
+    assert!(groups.iter().all(|g| children(&s, *g).len() == 2));
+    assert!(selected(&s, &groups));
     undo_gives_back(&mut s, &before);
 }
 
@@ -339,9 +443,196 @@ fn group_delete_and_duplicate_across_layers_and_inside_a_group_keep_order_and_id
     undo_gives_back(&mut s, &before);
 }
 
-/// `object.transform` copies ids listed twice, and an object listed before a group around it.
-/// Each copy goes directly above its original, a later copy of the same object goes below an
-/// earlier one, and the copy of the group holds a copy of the copy made inside the group before it.
+/// After the Layers panel's Delete Selection, Duplicate Selection, row drags, Collect in New Layer
+/// and Merge Selected on rows in two layers and inside a group, the layers hold the rows and the
+/// new ones in the order, and with the ids, that each check lists, and Undo gives back the
+/// document.
+#[test]
+fn layers_panel_rows_across_layers_and_inside_a_group_keep_order_and_ids() {
+    let (mut s, [a, b, c, d, e, f, g, h, group]) = two_layers();
+    let before = s.doc().unwrap().doc.clone();
+    let (n, l1, l2) = (before.peek_next_id(), before.layers[0].id.0, before.layers[1].id.0);
+
+    let r = s.execute("layer.delete", &json!({"ids": [a, e, h]})).unwrap();
+    assert_eq!(r["deleted"], 3);
+    assert_eq!(layers(&s), [json!([b, c, [group, d, f]]), json!([g])]);
+    assert!(selected(&s, &[NodeId(c), NodeId(g)]));
+    undo_gives_back(&mut s, &before);
+
+    // Each copy goes directly above its row and takes the next id; a layer's copy is renamed.
+    let r = s.execute("layer.duplicate", &json!({"ids": [a, e, h]})).unwrap();
+    assert_eq!(r["ids"], json!([n, n + 1, n + 2]));
+    assert_eq!(layers(&s), [json!([a, n, b, c, [group, d, e, n + 1, f]]), json!([g, h, n + 2])]);
+    undo_gives_back(&mut s, &before);
+    let r = s.execute("layer.duplicate", &json!({"ids": [l2]})).unwrap();
+    assert_eq!(r["ids"], json!([n]));
+    assert_eq!(layers(&s), [json!([a, b, c, [group, d, e, f]]), json!([g, h]), json!([n + 1, n + 2])]);
+    assert_eq!(s.doc().unwrap().doc.layers[2].name.as_deref(), Some("Layer 2 copy"));
+    undo_gives_back(&mut s, &before);
+
+    // Rows are dragged below c, then above d in the group, and copies of rows are dragged above g.
+    let r = s.execute("layer.move", &json!({"ids": [a, e, h], "target": c, "place": "below"})).unwrap();
+    assert_eq!(r["ids"], json!([a, e, h]));
+    assert_eq!(layers(&s), [json!([b, a, e, h, c, [group, d, f]]), json!([g])]);
+    undo_gives_back(&mut s, &before);
+    s.execute("layer.move", &json!({"ids": [a, g], "target": d, "place": "above"})).unwrap();
+    assert_eq!(layers(&s), [json!([b, c, [group, d, a, g, e, f]]), json!([h])]);
+    undo_gives_back(&mut s, &before);
+    let r = s.execute("layer.move", &json!({"ids": [a, e], "target": g, "place": "above", "copy": true})).unwrap();
+    assert_eq!(r["ids"], json!([n, n + 1]));
+    assert_eq!(layers(&s), [json!([a, b, c, [group, d, e, f]]), json!([g, n, n + 1, h])]);
+    undo_gives_back(&mut s, &before);
+
+    // The new layer goes where the topmost row was when that row is in a layer, and on top of the
+    // layer holding the topmost row's group when it is in a group.
+    assert_eq!(s.execute("layer.collectInNew", &json!({"ids": [a, e, g]})).unwrap()["id"], json!(n));
+    assert_eq!(layers(&s), [json!([b, c, [group, d, f]]), json!([[n, a, e, g], h])]);
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(n)).unwrap().name.as_deref(), Some("Layer 3"));
+    undo_gives_back(&mut s, &before);
+    assert_eq!(s.execute("layer.collectInNew", &json!({"ids": [a, e]})).unwrap()["id"], json!(n));
+    assert_eq!(layers(&s), [json!([b, c, [group, d, f], [n, a, e]]), json!([g, h])]);
+    undo_gives_back(&mut s, &before);
+
+    // Rows merge into the layer listed last, in the stacking order, and so does a merged layer's
+    // art.
+    s.execute("layer.merge", &json!({"ids": [e, g, l1]})).unwrap();
+    assert_eq!(layers(&s), [json!([a, b, c, [group, d, f], e, g]), json!([h])]);
+    undo_gives_back(&mut s, &before);
+    s.execute("layer.merge", &json!({"ids": [l1, l2]})).unwrap();
+    assert_eq!(layers(&s), [json!([a, b, c, [group, d, e, f], g, h])]);
+    undo_gives_back(&mut s, &before);
+}
+
+/// Release to Layers (Sequence on a layer and on a group, Build on a layer) and Flatten Artwork
+/// leave the layers, sublayers and objects in the order, and with the ids and names, that each
+/// check lists, and Undo gives back the document.
+#[test]
+fn release_to_layers_and_flatten_artwork_keep_order_and_ids() {
+    let (mut s, [a, b, c, d, e, f, g, h, group]) = two_layers();
+    let l2 = s.doc().unwrap().doc.layers[1].id.0;
+    // Layer 2 also holds a sublayer, on top of g and h.
+    let sub = s.execute("layer.newSublayer", &json!({"parent": l2})).unwrap()["id"].as_u64().unwrap();
+    let before = s.doc().unwrap().doc.clone();
+    let (n, l1) = (before.peek_next_id(), before.layers[0].id.0);
+    let names = |s: &Session, r: &Value| ids_in(r).iter().map(|id| s.doc().unwrap().doc.node(*id).unwrap().display_name()).collect::<Vec<_>>();
+
+    // A layer's objects go into sublayers of their own, below its sublayers.
+    let r = s.execute("layer.releaseToLayers", &json!({"id": l2})).unwrap();
+    assert_eq!(r["ids"], json!([n, n + 1]));
+    assert_eq!(layers(&s), [json!([a, b, c, [group, d, e, f]]), json!([[n, g], [n + 1, h], [sub]])]);
+    assert_eq!(names(&s, &r), ["Layer 4", "Layer 5"]);
+    undo_gives_back(&mut s, &before);
+
+    // Build: a sublayer holds copies of the objects below its own and a copy of its own, and the
+    // top one holds the objects.
+    let r = s.execute("layer.releaseToLayersBuild", &json!({"id": l2})).unwrap();
+    assert_eq!(r["ids"], json!([n, n + 2]));
+    assert_eq!(layers(&s), [json!([a, b, c, [group, d, e, f]]), json!([[n, n + 1], [n + 2, g, h], [sub]])]);
+    assert_eq!(names(&s, &r), ["Layer 4", "Layer 5"]);
+    undo_gives_back(&mut s, &before);
+
+    // A group's objects go into sublayers of its layer, where the group was.
+    let r = s.execute("layer.releaseToLayers", &json!({"id": group})).unwrap();
+    assert_eq!(r["ids"], json!([n, n + 1, n + 2]));
+    assert_eq!(layers(&s), [json!([a, b, c, [n, d], [n + 1, e], [n + 2, f]]), json!([g, h, [sub]])]);
+    assert_eq!(names(&s, &r), ["Layer 4", "Layer 5", "Layer 6"]);
+    undo_gives_back(&mut s, &before);
+
+    // Flatten Artwork into Layer 1 deletes the two hidden layers and keeps the template layer.
+    for p in [json!({"top": true, "visible": false}), json!({"top": true, "visible": false}), json!({"top": true, "template": true})] {
+        s.execute("layer.new", &p).unwrap();
+    }
+    let before = s.doc().unwrap().doc.clone();
+    assert_eq!(s.execute("layer.flatten", &json!({"id": l1})).unwrap()["discarded"], 2);
+    assert_eq!(layers(&s), [json!([a, b, c, [group, d, e, f], g, h, [sub]]), json!([])]);
+    undo_gives_back(&mut s, &before);
+}
+
+/// Duplicate Artboard and `artboard.move` with `copy` and `moveArt` (the Artboard tool's Alt-drag
+/// with Move/Copy Artwork with Artboard on) put a copy of each object on the artboard directly
+/// above it, moved with the artboard's copy, and Cut Artboard removes those objects. An object off
+/// the artboard stays. The layers then hold the objects in the order, and with the ids, that each
+/// check lists, and Undo gives back the document.
+#[test]
+fn artboard_copies_and_cut_keep_order_and_ids() {
+    let (mut s, [a, b, c, d, e, f, g, h, group]) = two_layers();
+    let off = s.execute("shape.rectangle", &json!({"x": 900, "y": 10, "width": 10, "height": 10})).unwrap()["id"].as_u64().unwrap();
+    s.execute("artboard.new", &json!({})).unwrap();
+    let before = s.doc().unwrap().doc.clone();
+    let n = before.peek_next_id();
+    let copies = json!([n, n + 1, n + 2, n + 3, n + 7, n + 8]);
+    let copied = [json!([a, n, b, n + 1, c, n + 2, [group, d, e, f], [n + 3, n + 4, n + 5, n + 6]]), json!([g, n + 7, h, n + 8, off])];
+    // The copy of h, the last object on the artboard, sits where h sits, moved by `dx`.
+    let moved_by = |s: &Session, dx: f64| bounds(s, NodeId(n + 8)) == bounds(s, NodeId(h)) + vectorcraft_geom::Vec2::new(dx, 0.0);
+
+    // Duplicate Artboard places the copy 20 pt right of the last artboard.
+    let right = before.artboards.iter().map(|ab| ab.rect.x1).fold(f64::MIN, f64::max);
+    assert_eq!(s.execute("artboard.duplicate", &json!({"index": 0, "art": true})).unwrap()["ids"], copies);
+    assert_eq!(layers(&s), copied);
+    assert!(moved_by(&s, right + 20.0));
+    undo_gives_back(&mut s, &before);
+
+    let r = s.execute("artboard.move", &json!({"index": 0, "dx": 900, "dy": 0, "copy": true, "moveArt": true})).unwrap();
+    assert_eq!(r["moved"], copies);
+    assert_eq!(layers(&s), copied);
+    assert!(moved_by(&s, 900.0));
+    undo_gives_back(&mut s, &before);
+
+    assert_eq!(s.execute("artboard.cut", &json!({"index": 0, "art": true})).unwrap()["copied"], 6);
+    assert_eq!(layers(&s), [json!([]), json!([off])]);
+    undo_gives_back(&mut s, &before);
+}
+
+/// After Offset Path, Outline Stroke, Unite and Clean Up of objects in two layers and inside a
+/// group, the layers hold the objects and the new ones in the order, and with the ids, that each
+/// check lists, and Undo gives back the document.
+#[test]
+fn path_commands_across_layers_and_inside_a_group_keep_order_and_ids() {
+    let (mut s, [a, b, c, d, e, f, g, h, group]) = two_layers();
+    let before = s.doc().unwrap().doc.clone();
+    let n = before.peek_next_id();
+
+    let r = s.execute("object.path.offsetPath", &json!({"offset": 1})).unwrap();
+    assert_eq!(r["ids"], json!([n, n + 1, n + 2, n + 3, n + 4]));
+    assert_eq!(layers(&s), [json!([a, n, b, c, n + 1, [group, d, e, n + 2, f]]), json!([g, n + 3, h, n + 4])]);
+    assert!(selected(&s, &ids_from(n, 5)));
+    undo_gives_back(&mut s, &before);
+
+    // Each object becomes a group of its fill and the outline of its stroke, where it was.
+    let r = s.execute("object.path.outlineStroke", &json!({})).unwrap();
+    let [a2, c2, e2, g2, h2] = <[NodeId; 5]>::try_from(ids_in(&r)).unwrap();
+    assert!(n <= a2.0 && a2 < c2 && c2 < e2 && e2 < g2 && g2 < h2);
+    assert_eq!(layer(&s, 0), [a2, NodeId(b), c2, NodeId(group)]);
+    assert_eq!(children(&s, NodeId(group)), [NodeId(d), e2, NodeId(f)]);
+    assert_eq!(layer(&s, 1), [g2, h2]);
+    assert!(selected(&s, &[a2, c2, e2, g2, h2]));
+    undo_gives_back(&mut s, &before);
+
+    // The result goes where the topmost object, h, was.
+    let r = s.execute("object.pathfinder.unite", &json!({})).unwrap();
+    assert_eq!(r["ids"], json!([n]));
+    assert_eq!(layers(&s)[0], json!([b, [group, d, f]]));
+    assert_eq!(layer(&s, 1), [NodeId(n)]);
+    assert!(selected(&s, &[NodeId(n)]));
+    undo_gives_back(&mut s, &before);
+
+    s.edit("Paint nothing", |d, _| {
+        for id in [a, e, h] {
+            d.node_mut(NodeId(id)).unwrap().appearance = Appearance::default().into();
+        }
+        Ok(())
+    })
+    .unwrap();
+    let before = s.doc().unwrap().doc.clone();
+    let r = s.execute("object.path.cleanUp", &json!({})).unwrap();
+    assert_eq!(r["removed"], json!(3));
+    assert_eq!(layers(&s), [json!([b, c, [group, d, f]]), json!([g])]);
+    undo_gives_back(&mut s, &before);
+}
+
+/// `object.transform` copies ids listed twice, and copies an object listed before a group around it
+/// only with the group, as it does with the two selected. Each copy goes directly above its
+/// original, and a later copy of the same object goes below an earlier one.
 #[test]
 fn copies_of_ids_listed_twice_or_inside_another_listed_id_keep_their_order_and_ids() {
     let (mut s, [a, b, c, d, e, f, g, h, group]) = two_layers();
@@ -349,9 +640,9 @@ fn copies_of_ids_listed_twice_or_inside_another_listed_id_keep_their_order_and_i
     let n = before.peek_next_id();
 
     let r = s.execute("object.transform", &json!({"matrix": [1, 0, 0, 1, 5, 0], "copy": true, "ids": [e, group]})).unwrap();
-    assert_eq!(r["ids"], json!([n, n + 1]));
-    let copied = json!([n + 1, n + 2, n + 3, n + 4, n + 5]);
-    assert_eq!(layers(&s), [json!([a, b, c, [group, d, e, n, f], copied]), json!([g, h])]);
+    assert_eq!(r["ids"], json!([n]));
+    let copied = json!([n, n + 1, n + 2, n + 3]);
+    assert_eq!(layers(&s), [json!([a, b, c, [group, d, e, f], copied]), json!([g, h])]);
     undo_gives_back(&mut s, &before);
 
     let r = s.execute("object.transform", &json!({"matrix": [1, 0, 0, 1, 5, 0], "copy": true, "ids": [a, a]})).unwrap();

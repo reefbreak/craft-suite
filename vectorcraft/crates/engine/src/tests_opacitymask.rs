@@ -3,6 +3,8 @@
 //! report mixed values, and saves and exports never carry the editing layer.
 
 use serde_json::{Value, json};
+use vectorcraft_geom::Affine;
+use vectorcraft_render::{RenderOptions, Renderer};
 
 use super::*;
 use crate::cmd::maskedit::MASK_EDIT_LAYER;
@@ -44,6 +46,21 @@ fn has_edit_layer(d: &Document) -> bool {
 
 fn data(v: &Value) -> Vec<u8> {
     vectorcraft_format::base64_decode(v["dataBase64"].as_str().unwrap()).unwrap()
+}
+
+/// #2727: the canvas passes `isolation` while mask art is edited; the editing layer is not drawn on
+/// the page, so isolation dimming must not run or the artwork washes out.
+#[test]
+fn mask_editing_does_not_dim_the_canvas() {
+    let mut s = session();
+    editing_mask(&mut s);
+    let st = s.doc().unwrap();
+    let layer = st.isolation.expect("mask editing isolates the temporary layer");
+    let render = |opts: &RenderOptions| Renderer::new().render(&st.doc, 300, 300, Affine::IDENTITY, opts);
+    let plain = render(&RenderOptions::default());
+    let canvas = render(&RenderOptions { isolated: Some(layer), ..Default::default() });
+    assert_eq!(plain.pixel(50, 100), canvas.pixel(50, 100), "inside the mask");
+    assert_eq!(plain.pixel(250, 100), canvas.pixel(250, 100), "outside the mask");
 }
 
 #[test]
@@ -150,6 +167,30 @@ fn release_while_editing_leaves_editing_first() {
     // One undo step restores the mask and editing mode.
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(mask(&s, obj).is_some() && doc(&s).mask_edit.is_some());
+}
+
+/// Releasing the masks of a group and of an object inside it puts each mask's art directly above
+/// its object, as releasing one mask at a time does.
+#[test]
+fn release_of_a_masked_group_and_a_masked_object_inside_it_keeps_order_and_ids() {
+    let mut s = session();
+    let (a, m1) = (rect(&mut s, 0.0, 100.0), rect(&mut s, 0.0, 50.0));
+    s.execute("transparency.makeOpacityMask", &json!({"ids": [a.0, m1.0]})).unwrap();
+    let b = rect(&mut s, 150.0, 100.0);
+    s.execute("select.set", &json!({"ids": [a.0, b.0]})).unwrap();
+    let group = NodeId(s.execute("object.group", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let m2 = rect(&mut s, 0.0, 300.0);
+    s.execute("transparency.makeOpacityMask", &json!({"ids": [group.0, m2.0]})).unwrap();
+    let before = doc(&s).clone();
+    let n = before.peek_next_id();
+    s.execute("transparency.releaseOpacityMask", &json!({"ids": [group.0, a.0]})).unwrap();
+    let ids = |n: &vectorcraft_doc::Node| n.children().unwrap().iter().map(|c| c.id).collect::<Vec<_>>();
+    assert_eq!(ids(&doc(&s).layers[0]), [group, NodeId(n)]);
+    assert_eq!(ids(doc(&s).node(group).unwrap()), [a, NodeId(n + 1), b]);
+    assert!(mask(&s, group).is_none() && mask(&s, a).is_none());
+    assert_eq!(s.doc().unwrap().selection.objects, [group, NodeId(n), a, NodeId(n + 1)]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(*doc(&s) == before, "Undo gives back the document");
 }
 
 #[test]
