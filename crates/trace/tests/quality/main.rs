@@ -6,6 +6,7 @@
 //! ```
 //!
 //! `TRACE_QUALITY_MP` (default `1,4,16`) sets the megapixel sizes of the cost table.
+//! `TRACE_QUALITY_CLASS=centre-lines` selects only the code-drawn centre-line report.
 //!
 //! A yardstick: `TRACE_QUALITY_IMAGES=dir` also writes the drawings there as PNG files, and
 //! `TRACE_QUALITY_YARDSTICK=dir` measures the SVG files of the same names found there (what another
@@ -15,6 +16,9 @@
 // The peak-memory measure needs a counting global allocator.
 #![allow(unsafe_code)]
 
+mod centre_geom;
+mod centre_lines;
+mod centre_scenes;
 mod inputs;
 mod measure;
 mod raster;
@@ -29,7 +33,7 @@ use measure::{Metrics, measure};
 use vectorcraft_trace::{Raster, TraceParams, TraceResult, TracedPath, presets, trace_within};
 
 /// The engine's limit (`MAX_TRACE_ANCHORS`): a trace past it is refused.
-const MAX_ANCHORS: usize = 2_000_000;
+const MAX_ANCHORS: usize = 8_000_000;
 
 struct Counting;
 static LIVE: AtomicUsize = AtomicUsize::new(0);
@@ -64,15 +68,22 @@ static ALLOC: Counting = Counting;
 
 /// Whether `input` is what `preset` is meant for.
 fn target(preset: &str, input: &Input) -> bool {
+    let preset = preset.strip_suffix(", enhanced").unwrap_or(preset);
     let classes: &[Class] = match preset {
-        "High Fidelity Photo" | "Low Fidelity Photo" | "Shades of Gray" => &[Class::Tone],
+        "High Fidelity Photo"
+        | "Low Fidelity Photo"
+        | "Shades of Gray"
+        | "Shades of Gray with Auto Grouping"
+        | "High Fidelity Photo with Auto Grouping" => &[Class::Tone],
         // Three colours cannot show the badge's five.
         "3 Colors" => return input.name == "two touching halves",
-        "6 Colors" | "16 Colors" | "Flat Logo" => &[Class::Flat],
+        "6 Colors" | "16 Colors" | "Flat Logo" | "Auto Color" | "6 Colors with Auto Grouping" => &[Class::Flat],
+        "Default with Shapes" | "6 Colors with Shapes" => &[Class::Plain],
+        name if name.ends_with("Gradients") => &[Class::Ramp],
         "Sketched Art" => &[Class::Shape, Class::Lines],
         "Silhouettes" => &[Class::Shape],
-        "Line Art" => &[Class::Lines],
-        "Technical Drawing" => &[Class::Lines, Class::Poly],
+        "Line Art" | "Outline" => &[Class::Lines],
+        "Technical Drawing" => &[Class::Lines, Class::Poly, Class::Askew],
         _ => &[Class::Shape, Class::Poly],
     };
     classes.contains(&input.class)
@@ -134,9 +145,17 @@ fn svg_trace(svg: &str) -> TraceResult {
                 _ => panic!("unread transform {t}"),
             });
         }
-        Some(TracedPath { path: vectorcraft_geom::PathData::from_bezpath(&path), color: [0; 3], pixels: 0, stroke: None })
+        Some(TracedPath {
+            path: vectorcraft_geom::PathData::from_bezpath(&path),
+            color: [0; 3],
+            pixels: 0,
+            stroke: None,
+            shape: None,
+            gradient: None,
+            square_caps: false,
+        })
     });
-    TraceResult { paths: paths.collect(), palette: vec![[0; 3]] }
+    TraceResult { paths: paths.collect(), palette: vec![[0; 3]], ..Default::default() }
 }
 
 fn run_all(presets: &[(&'static str, TraceParams)], drawn: &[Drawing]) -> Vec<Run> {
@@ -172,12 +191,12 @@ fn stat(runs: &[&Metrics], field: impl Fn(&Metrics) -> f64, max: bool, digits: u
     if x.is_finite() { format!("{:.digits$}", x + 0.0) } else { "all".into() }
 }
 
-const HEADER: &str = "| ΔE | edge ΔE | off mean | off max | missed max | paths | anchors | × art | lines % | corners % | kinks | odd colours | odd px | gap px | overlap px | specks | outside px |\n|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|\n";
+const HEADER: &str = "| ΔE | edge ΔE | off mean | off max | missed max | paths | anchors | × art | lines % | upright % | corners % | kinks | odd colours | odd px | gap px | overlap px | specks | outside px | centre off | width off | anchors a stroke | shapes % | false shapes | grouped % | gradient paths | found % | angle off | ramp off |\n|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|\n";
 
 fn row(runs: &[&Run]) -> String {
     let m: Vec<&Metrics> = runs.iter().filter_map(|r| r.metrics.as_ref()).collect();
     if m.is_empty() {
-        return format!("| refused |{}", " |".repeat(16));
+        return format!("| refused |{}", " |".repeat(27));
     }
     let cells = [
         stat(&m, |m| m.delta, false, 2),
@@ -189,6 +208,7 @@ fn row(runs: &[&Run]) -> String {
         stat(&m, |m| m.anchors, false, 0),
         stat(&m, |m| m.anchor_ratio, false, 2),
         stat(&m, |m| m.lines, false, 0),
+        stat(&m, |m| m.upright, false, 0),
         stat(&m, |m| m.corners, false, 0),
         stat(&m, |m| m.kinks, false, 1),
         stat(&m, |m| m.slivers, false, 1),
@@ -197,6 +217,16 @@ fn row(runs: &[&Run]) -> String {
         stat(&m, |m| m.overlap, false, 1),
         stat(&m, |m| m.specks, false, 1),
         stat(&m, |m| m.outside, true, 1),
+        stat(&m, |m| m.centre_off, false, 3),
+        stat(&m, |m| m.width_off, false, 2),
+        stat(&m, |m| m.stroke_anchors, false, 1),
+        stat(&m, |m| m.shapes, false, 0),
+        stat(&m, |m| m.false_shapes, false, 2),
+        stat(&m, |m| m.grouped, false, 0),
+        stat(&m, |m| m.gradients, false, 1),
+        stat(&m, |m| m.ramp_found, false, 0),
+        stat(&m, |m| m.ramp_angle, true, 1),
+        stat(&m, |m| m.ramp_off, true, 0),
     ];
     format!("| {} |", cells.join(" | "))
 }
@@ -213,17 +243,42 @@ fn cost(img: &Raster, params: &TraceParams) -> String {
         Ok(res) => format!("{secs:.2} s, {} paths, {} anchors, {mb:.0} MB", res.paths.len(), res.anchor_count()),
         Err(e) => {
             let why = e.to_string();
-            let why = if why.contains("anchor points") { "over 2,000,000 anchors" } else { "not flat art" };
+            let why = if why.contains("anchor points") { "over 8,000,000 anchors" } else { "not flat art" };
             format!("refused after {secs:.2} s ({why}), {mb:.0} MB")
         }
     }
 }
 
 fn report() -> String {
-    let presets = presets();
+    // The built-in presets, and some of them with the Shapes or the Auto Grouping option on.
+    let mut presets = presets();
+    for (name, base) in [("Default with Shapes", "Default"), ("6 Colors with Shapes", "6 Colors")] {
+        presets.push((name, TraceParams { shapes: true, ..vectorcraft_trace::preset(base).unwrap() }));
+    }
+    for (name, base) in [
+        ("6 Colors with Auto Grouping", "6 Colors"),
+        ("Shades of Gray with Auto Grouping", "Shades of Gray"),
+        ("High Fidelity Photo with Auto Grouping", "High Fidelity Photo"),
+    ] {
+        presets.push((name, TraceParams { auto_grouping: true, ..vectorcraft_trace::preset(base).unwrap() }));
+    }
+    // Gradients: on the inputs that are linear gradients, with the option and without it.
+    for (name, base, gradients) in [
+        ("6 Colors, no Gradients", "6 Colors", false),
+        ("6 Colors with Gradients", "6 Colors", true),
+        ("High Fidelity Photo, no Gradients", "High Fidelity Photo", false),
+        ("High Fidelity Photo with Gradients", "High Fidelity Photo", true),
+    ] {
+        presets.push((name, TraceParams { gradients, ..vectorcraft_trace::preset(base).unwrap() }));
+    }
+    // Each preset's enhanced version, on that preset's own inputs.
+    for name in vectorcraft_trace::PRESET_NAMES {
+        let enhanced: &'static str = Box::leak(format!("{name}, enhanced").into_boxed_str());
+        presets.extend(vectorcraft_trace::enhanced_preset(name).map(|p| (enhanced, p)));
+    }
     let inputs = inputs();
     let drawn = draw_all(&inputs);
-    let one_colour = |d: &&Drawing| matches!(d.0.class, Class::Shape | Class::Poly | Class::Lines);
+    let one_colour = |d: &&Drawing| matches!(d.0.class, Class::Shape | Class::Poly | Class::Lines | Class::Askew | Class::Plain);
     if let Ok(dir) = std::env::var("TRACE_QUALITY_IMAGES") {
         for (input, size, variant, img) in &drawn {
             std::fs::write(format!("{dir}/{}.png", stem(input, *size, *variant)), img.encode_png()).unwrap();
@@ -270,7 +325,7 @@ fn report() -> String {
             .collect();
         let _ = write!(md, "\n## 4. Yardstick\n\n{} traces by another tracer, measured the same way.\n\n| inputs | variant ", theirs.len());
         md += HEADER.replacen("\n|", "\n|:--|:--|", 1).as_str();
-        for class in [Class::Shape, Class::Poly, Class::Lines] {
+        for class in [Class::Shape, Class::Poly, Class::Lines, Class::Askew, Class::Plain] {
             for variant in VARIANTS {
                 let rows: Vec<&Run> = theirs.iter().filter(|r| r.class == class && r.variant == variant).collect();
                 let _ = writeln!(md, "| {} | {} {}", class.name(), variant.name(), row(&rows));
@@ -286,7 +341,7 @@ fn report() -> String {
         .map(|mp| (mp.sqrt() * 1024.0).round() as u32)
         .collect();
     let (photo, badge) = (inputs.iter().find(|i| i.name == "photo-like").unwrap(), inputs.iter().find(|i| i.name == "four-colour badge").unwrap());
-    md += "\n## 5. Cost\n\nOne trace at a time on this machine (all cores); memory is the peak allocated above the image itself. A trace of more than 2,000,000 anchors is refused, as in the app.\n\n| preset | image | megapixels | result |\n|:--|:--|--:|:--|\n";
+    md += "\n## 5. Cost\n\nOne trace at a time on this machine (all cores); memory is the peak allocated above the image itself. A trace of more than 8,000,000 anchors is refused, as in the app.\n\n| preset | image | megapixels | result |\n|:--|:--|--:|:--|\n";
     for size in sizes {
         let n = size as usize;
         let images = [("photo-like", photo.draw(size, Variant::Clean)), ("four-colour badge", raster::render(&badge.scaled(size), badge.bg, n, n))];
@@ -296,14 +351,34 @@ fn report() -> String {
             }
         }
     }
+    md += &centre_lines::report();
     md
 }
 
 #[test]
 #[ignore = "slow: measures every preset and writes the quality report (run with --release)"]
 fn quality_report() {
+    // One ignored test owns the allocator's cost measurements. Selecting this class
+    // here avoids a second ignored test allocating concurrently with those measurements.
+    if std::env::var("TRACE_QUALITY_CLASS").as_deref() == Ok("centre-lines") {
+        let md = centre_lines::report();
+        println!("{md}");
+        if let Ok(path) = std::env::var("TRACE_QUALITY_REPORT") {
+            std::fs::write(path, md).unwrap();
+        }
+        return;
+    }
     let md = report();
     println!("{md}");
+    // Gradients finds none in art that is flat colour, however it is degraded.
+    let inputs = inputs();
+    for (name, _) in presets().iter().filter(|(_, p)| p.mode != vectorcraft_trace::Mode::BlackAndWhite && p.mode != vectorcraft_trace::Mode::Logo) {
+        let params = TraceParams { gradients: true, ..vectorcraft_trace::preset(name).unwrap() };
+        for (input, size, variant, img) in draw_all(&inputs).iter().filter(|d| !matches!(d.0.class, Class::Tone | Class::Ramp)) {
+            let found = trace_within(img, &params, MAX_ANCHORS).map_or(0, |res| res.paths.iter().filter(|p| p.gradient.is_some()).count());
+            assert_eq!(found, 0, "{name} with Gradients on {} at {size} px, {variant:?}", input.name);
+        }
+    }
     if let Ok(path) = std::env::var("TRACE_QUALITY_REPORT") {
         std::fs::write(path, md).unwrap();
     }

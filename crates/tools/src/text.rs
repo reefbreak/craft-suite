@@ -2,9 +2,10 @@
 //!
 //! Type: click places point type, drag draws an area-type frame, clicking into existing text
 //! places the caret. Area Type / Type on a Path: click a path to turn it into a text frame or a
-//! baseline (`text.createInPath`). Point type placed by a click and left empty is discarded when
-//! editing ends (`text.discardEmpty`); frames keep their shape. Where new type goes (the click, the
-//! frame's corners) snaps to Smart Guides ([`DrawSnap`]), hovering too.
+//! baseline (`text.createInPath`). While type is being edited, a click that lands on no type only
+//! ends the editing, and the next click makes new type. Point type placed by a click and left
+//! empty is discarded when editing ends (`text.discardEmpty`); frames keep their shape. Where new
+//! type goes (the click, the frame's corners) snaps to Smart Guides ([`DrawSnap`]), hovering too.
 //!
 //! While editing: caret movement by character / word (Cmd or Alt) / line (Up/Down) / line ends
 //! (Home/End; Cmd = whole text), Shift extends the selection, drag selects, double-click selects a
@@ -20,7 +21,7 @@
 //! underlined, until the IME commits it (it then goes through [`Tool::text_input`]) or clears it.
 
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::{Value, json};
 use vectorcraft_doc::hit::hit_test;
@@ -29,7 +30,7 @@ use vectorcraft_geom::{BezPath, Point, Rect, Shape};
 use vectorcraft_text::{FontDb, TextLayout, edit};
 
 use crate::guides::DrawSnap;
-use crate::{Action, Cursor, Mods, Overlay, PointerEvent, PointerKind, Tool, ToolContext, ToolKey};
+use crate::{Action, Cursor, ImeSurrounding, Mods, Overlay, PointerEvent, PointerKind, SurroundingUnit, Tool, ToolContext, ToolKey};
 
 /// Which of the Type tools this is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -62,12 +63,36 @@ struct Preedit {
 /// The edited text's layout, keyed by the font database's generation and the text.
 type CachedLayout = ((u64, TextObject), Arc<TextLayout>);
 
+/// Process-global Type-tool edit-session counter: the IME target's replacement epoch.
+///
+/// A per-tool counter restarts at zero when the tool is recreated (a document switch, File ›
+/// Revert), while the document keeps its uid and node ids. The same `(document, node)` would then
+/// receive an epoch a still-cached native IME context already used, violating the replacement
+/// contract that an old context can never edit the new owner. Sessions are therefore numbered for
+/// the process lifetime; the counter only stops changing after 2^64 sessions (unreachable).
+/// A mutex (not an `AtomicU64`) keeps this available on wasm targets without 64-bit atomics.
+static NEXT_EDIT_SESSION: Mutex<u64> = Mutex::new(0);
+
+fn next_edit_session() -> u64 {
+    let mut next = NEXT_EDIT_SESSION.lock().unwrap_or_else(PoisonError::into_inner);
+    let session = next.checked_add(1).unwrap_or(u64::MAX);
+    *next = session;
+    session
+}
+
 #[derive(Default)]
 pub struct TypeTool {
     vertical: bool,
     mode: Mode,
+    /// The tool to return to on Escape (e.g. when double-clicked from a selection tool).
+    prev_tool: Option<String>,
     /// Text object being edited.
     editing: Option<NodeId>,
+    /// Monotonic identity of this edit session (the IME target's replacement epoch): it changes
+    /// whenever editing starts afresh, including on the same text object, and never on ordinary
+    /// edits or caret moves. Numbered process-wide ([`NEXT_EDIT_SESSION`]), so recreating the tool
+    /// (File › Revert, a document switch) cannot reuse an epoch of the same document and node.
+    edit_session: u64,
     /// The point type a click just placed (edited now): discarded if empty when editing ends.
     fresh: Option<NodeId>,
     /// Caret and selection anchor (byte offsets into the plain text).
@@ -77,6 +102,10 @@ pub struct TypeTool {
     goal_x: Option<f64>,
     typing: Option<Typing>,
     preedit: Option<Preedit>,
+    /// A command from outside the tool (`settle_interaction`, an external edit while typing) ended
+    /// the typing session, while the text stays open for editing. A commit over that edit is
+    /// application-origin unless an IME deletion has already begun a fresh typing session.
+    typing_ended: bool,
     /// Where the button went down, and where new type goes from there (snapped to Smart Guides).
     press: Option<(Point, Point)>,
     /// The other corner of an area dragged out (snapped).
@@ -126,16 +155,74 @@ impl TypeTool {
     }
 
     fn plain(&self, cx: &ToolContext) -> String {
+        let document = self.editing.and_then(|id| Self::text(cx, id));
         match &self.typing {
+            // A session the document changed under is not the edited text any more: use the
+            // document's own runs (word/paragraph selection must not index stale text).
+            Some(ty) if document.is_some_and(|t| ty.cur != t.runs) => document.map(|t| t.plain_text()).unwrap_or_default(),
             Some(ty) => ty.cur.iter().map(|r| r.text.as_str()).collect(),
-            None => self.editing.and_then(|id| Self::text(cx, id)).map(|t| t.plain_text()).unwrap_or_default(),
+            None => document.map(|t| t.plain_text()).unwrap_or_default(),
         }
     }
 
-    /// The edited object as it currently is (with the typing session's runs).
+    /// The edited plain text as borrowed run slices: the IME query copies only the bounded window
+    /// it needs, never the whole document text. A typing session whose runs no longer match the
+    /// document (an external edit) is not used; the document's runs are.
+    fn plain_segments<'a>(&'a self, cx: &'a ToolContext) -> Option<Vec<&'a str>> {
+        let id = self.editing?;
+        let t = Self::text(cx, id)?;
+        match &self.typing {
+            Some(ty) if ty.cur == t.runs => Some(ty.cur.iter().map(|r| r.text.as_str()).collect()),
+            _ => Some(t.runs.iter().map(|r| r.text.as_str()).collect()),
+        }
+    }
+
+    /// The exact text [`Tool::text_input`] would insert for `s`: control characters removed, `\r`
+    /// normalized to `\n`, and Typographer's Quotes applied to a straight quote. `None` when
+    /// nothing would be inserted. Shared with [`Tool::text_input_is_verbatim`] so the IME receipt
+    /// and the insertion cannot disagree about what was transformed.
+    fn input_text(&self, cx: &ToolContext, s: &str) -> Option<String> {
+        let s: String = s.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).map(|c| if c == '\r' { '\n' } else { c }).collect();
+        if s.is_empty() {
+            return None;
+        }
+        // Use Typographer's Quotes (Document Setup): a typed straight quote becomes the document's
+        // opening or closing quote, by the character before it.
+        let setup = &cx.doc.setup;
+        if setup.typographers_quotes && matches!(s.as_str(), "\"" | "'") {
+            let mut prev = self.char_before(cx, self.caret.min(self.anchor));
+            return Some(setup.quotes.apply(&s, &mut prev));
+        }
+        Some(s)
+    }
+
+    /// The character just before byte `at` in the edited plain text, walked run by run (the quote
+    /// direction needs one character, not a copy of the whole text).
+    fn char_before(&self, cx: &ToolContext, at: usize) -> Option<char> {
+        let segments = self.plain_segments(cx)?;
+        let mut acc = 0usize;
+        let mut prev = None;
+        for segment in &segments {
+            let end = acc + segment.len();
+            if at <= acc {
+                break;
+            }
+            let local = at.min(end).saturating_sub(acc);
+            if let Some((_, c)) = segment.char_indices().take_while(|(i, _)| *i < local).last() {
+                prev = Some(c);
+            }
+            acc = end;
+        }
+        prev
+    }
+
+    /// The edited object as it currently is (with the typing session's runs). A session the
+    /// document changed under is dropped: the document's own runs win.
     fn current(&self, cx: &ToolContext) -> Option<TextObject> {
         let mut t = Self::text(cx, self.editing?)?.clone();
-        if let Some(ty) = &self.typing {
+        if let Some(ty) = &self.typing
+            && ty.cur == t.runs
+        {
             t.runs = ty.cur.clone();
         }
         Some(t)
@@ -180,9 +267,11 @@ impl TypeTool {
         if self.typing.as_ref().is_some_and(|ty| ty.cur != t.runs) {
             out.push(Action::Commit);
             self.typing = None;
+            self.preedit = None;
         }
         if self.typing.is_none() {
             out.push(Action::Begin("Typing".into()));
+            self.typing_ended = false;
         }
         let ty = self.typing.get_or_insert_with(|| Typing { base: t.runs.clone(), cur: t.runs.clone(), lo: usize::MAX });
         let len = edit::runs_len(&ty.cur);
@@ -216,6 +305,7 @@ impl TypeTool {
     }
 
     fn start_editing(&mut self, id: NodeId, caret: usize) {
+        self.edit_session = next_edit_session();
         self.editing = Some(id);
         self.fresh = None;
         self.caret = caret;
@@ -223,6 +313,7 @@ impl TypeTool {
         self.goal_x = None;
         self.typing = None;
         self.preedit = None;
+        self.typing_ended = false;
     }
 
     /// Byte under `p` in the edited text if `p` is inside it (frame, path band or layout bounds).
@@ -269,14 +360,31 @@ impl TypeTool {
         Some(out)
     }
 
-    /// The button released after a press at `start` (new type goes at `at`).
+    /// The button released after a press at `start` (new type goes at `at`). While type is being
+    /// edited, a click that lands on no type only ends the editing; the next click makes new type
+    /// (#2871). A drag that draws an area-type frame makes it either way.
     fn on_up(&mut self, cx: &ToolContext, start: Point, at: Point) -> Vec<Action> {
         // Click into existing text: place the caret.
         if let Some(out) = self.edit_at(cx, start) {
             return out;
         }
+        let was_editing = self.editing.is_some_and(|id| Self::text(cx, id).is_some());
         let mut out = self.finish(cx);
         let drag = self.drag.take();
+        // New type is set along General › Constrain Angle's axes (none at 0° or a whole turn): an
+        // area's box measured along them, turned about its top-left corner, point type about its
+        // first baseline's start.
+        let axes = vectorcraft_geom::constrain_axes(cx.constrain_angle);
+        let back = axes.map(|a| a.inverse());
+        let area = drag
+            .map(|d| match back {
+                Some(b) => Rect::from_points(b * at, b * d),
+                None => Rect::from_points(at, d),
+            })
+            .filter(|r| r.width() > cx.tol(6.0) && r.height() > cx.tol(6.0));
+        if was_editing && area.is_none() {
+            return out;
+        }
         // Area Type / Type on a Path: click a path.
         if self.mode != Mode::Type && drag.is_none() {
             let on_path = self.mode == Mode::OnPath;
@@ -290,11 +398,16 @@ impl TypeTool {
                 return out;
             }
         }
-        let area = drag.map(|d| Rect::from_points(at, d)).filter(|r| r.width() > cx.tol(6.0) && r.height() > cx.tol(6.0));
         let mut params = match area {
-            Some(r) => json!({"x": r.x0, "y": r.y0, "text": "", "area": {"width": r.width(), "height": r.height()}}),
+            Some(r) => {
+                let o = axes.map_or(r.origin(), |a| a * r.origin());
+                json!({"x": o.x, "y": o.y, "text": "", "area": {"width": r.width(), "height": r.height()}})
+            }
             None => json!({"x": at.x, "y": at.y, "text": ""}),
         };
+        if let Some(rotation) = vectorcraft_geom::constrain_rotation(cx.constrain_angle) {
+            params["rotation"] = json!(rotation);
+        }
         params["vertical"] = json!(self.vertical);
         params["placeholder"] = json!(cx.placeholder_text);
         out.push(Action::Exec("text.create".into(), params));
@@ -302,32 +415,260 @@ impl TypeTool {
         out
     }
 
-    fn overflow_marker(t: &TextObject, lay: &TextLayout, cx: &ToolContext, o: &mut Vec<Overlay>) {
-        if !lay.overflow {
-            return;
-        }
-        // The out port: bottom-right of the frame (end of the path for type on a path).
-        let port = match &t.kind {
-            TextKind::Area { frame } => frame.bounds().map(|b| t.xf * Point::new(b.x1, b.y1)),
-            TextKind::OnPath { path, .. } => path.to_bezpath().segments().last().map(|s| t.xf * vectorcraft_geom::ParamCurve::end(&s)),
-            TextKind::Point => None,
+    /// Delete plain-text byte ranges in one typing session, shifting the caret, anchor and any
+    /// pre-edit range so the selection's direction and the marked text are preserved.
+    fn delete_ranges(&mut self, cx: &ToolContext, ranges: &[(usize, usize)]) -> Vec<Action> {
+        let Some(id) = self.editing else { return vec![] };
+        let Some(t) = Self::text(cx, id) else {
+            self.editing = None;
+            return vec![];
         };
-        let Some(c) = port else { return };
-        let h = cx.tol(4.5);
-        let r = Rect::new(c.x - h, c.y - h, c.x + h, c.y + h);
-        let red = [230, 30, 30];
-        o.push(Overlay::Path { path: r.to_path(0.1), color: red, width: 1.0, dashed: false });
-        let (k, m) = (cx.tol(2.5), r.center());
-        o.push(Overlay::Line { a: Point::new(m.x - k, m.y), b: Point::new(m.x + k, m.y), color: red, dashed: false });
-        o.push(Overlay::Line { a: Point::new(m.x, m.y - k), b: Point::new(m.x, m.y + k), color: red, dashed: false });
+        let mut out = vec![];
+        // The document changed under us (undo, a panel edit): start a new session.
+        if self.typing.as_ref().is_some_and(|ty| ty.cur != t.runs) {
+            out.push(Action::Commit);
+            self.typing = None;
+            // The marked text belonged to the replaced session; it must not be sliced out of the
+            // new document text by a stale range.
+            self.preedit = None;
+        }
+        if self.typing.is_none() {
+            out.push(Action::Begin("Typing".into()));
+            self.typing_ended = false;
+        }
+        let len = match &self.typing {
+            Some(ty) => edit::runs_len(&ty.cur),
+            None => edit::runs_len(&t.runs),
+        };
+        let mut sorted: Vec<(usize, usize)> = ranges.iter().map(|&(a, b)| (a.min(b).min(len), a.max(b).min(len))).filter(|(a, b)| a < b).collect();
+        sorted.sort_unstable();
+        if sorted.is_empty() {
+            return out;
+        }
+        // Shift the selection ends and the pre-edit by the bytes removed before them. The ranges
+        // lie outside the selection/pre-edit, so both ends move by the same preceding amount and
+        // a reversed selection stays reversed.
+        let shift = |at: usize| -> usize {
+            let removed: usize = sorted.iter().map(|&(a, b)| if at >= b { b - a } else { at.saturating_sub(a) }).sum();
+            at.saturating_sub(removed)
+        };
+        let (caret, anchor) = (self.caret.min(len), self.anchor.min(len));
+        self.caret = shift(caret);
+        self.anchor = shift(anchor);
+        if let Some(p) = &mut self.preedit {
+            p.range.start = shift(p.range.start.min(len));
+            p.range.end = shift(p.range.end.min(len));
+        }
+        self.goal_x = None;
+        let ty = self.typing.get_or_insert_with(|| Typing { base: t.runs.clone(), cur: t.runs.clone(), lo: usize::MAX });
+        // Delete from the end so earlier offsets stay valid; each call floors to a char boundary
+        // and the one Preview below still makes the whole session one undo step.
+        for &(a, b) in sorted.iter().rev() {
+            ty.lo = ty.lo.min(a);
+            edit::replace_range(&mut ty.cur, a, b, "");
+        }
+        // One preview for the whole session, exactly as `replace` does.
+        let base: String = ty.base.iter().map(|r| r.text.as_str()).collect();
+        let cur: String = ty.cur.iter().map(|r| r.text.as_str()).collect();
+        let (p, s) = common_affixes(&base, &cur, ty.lo);
+        let runs = edit::slice_runs(&ty.cur, p, cur.len() - s);
+        let runs = if runs.is_empty() { json!([]) } else { serde_json::to_value(&runs).unwrap_or(json!([])) };
+        out.push(Action::Preview("text.editRange".into(), json!({"id": id.0, "start": p, "end": base.len() - s, "runs": runs})));
+        out
     }
+}
+
+/// How far (screen px) the ports of area type sit from the frame's corners, along its sides: the
+/// out port above the bottom-right corner on the right side, the in port below the top-left corner
+/// on the left side, clear of the bounding box's corner handles, so both can be grabbed.
+pub const PORT_RISE_PX: f64 = 12.0;
+/// Half a port's side (screen px).
+const PORT_HALF_PX: f64 = 4.5;
+/// The red of the out port of text that doesn't fit.
+const OVERFLOW_RED: [u8; 3] = [230, 30, 30];
+
+/// One of the two ports of area type or type on a path: its story flows in through the in port
+/// and on through the out port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Port {
+    In,
+    Out,
+}
+
+/// What a port shows: empty when the frame is not threaded on that side (and, for the out port,
+/// all its text is seen), an arrow when it is threaded to another frame there, a red "+" in the out
+/// port when its text doesn't fit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortState {
+    Empty,
+    Threaded,
+    Overflow,
+}
+
+/// Centre of `port` of `t`, `px` document units to the screen pixel: area type's on its frame's
+/// sides by [`PORT_RISE_PX`] from the corners; type on a path's along its path, as far past its end
+/// bracket (out) or before its start bracket (in), clear of the brackets, which drag.
+pub fn port_centre(t: &TextObject, port: Port, px: f64) -> Option<Point> {
+    let rise = PORT_RISE_PX * px;
+    match &t.kind {
+        TextKind::Area { frame } => {
+            let b = frame.bounds()?;
+            // The corner the port sits by, and the far end of the side it sits on.
+            let (corner, far) = match port {
+                Port::Out => (Point::new(b.x1, b.y1), Point::new(b.x1, b.y0)),
+                Port::In => (Point::new(b.x0, b.y0), Point::new(b.x0, b.y1)),
+            };
+            let (corner, side) = (t.xf * corner, t.xf * far - t.xf * corner);
+            let len = side.hypot();
+            Some(if len > 1e-9 && len.is_finite() { corner + side * (rise.min(len / 2.0) / len) } else { corner })
+        }
+        TextKind::OnPath { path, .. } => {
+            let arc = vectorcraft_geom::ArcPath::new(path);
+            let (start, end) = t.kind.path_span()?;
+            if arc.is_empty() {
+                return None;
+            }
+            let (at, away) = match port {
+                Port::Out => (end, rise),
+                Port::In => (start, -rise),
+            };
+            let (p, dir) = arc.at(at * arc.len());
+            let (at, ahead) = (t.xf * p, t.xf * (p + dir) - t.xf * p);
+            let len = ahead.hypot();
+            Some(if len > 1e-9 && len.is_finite() { at + ahead * (away / len) } else { at })
+        }
+        TextKind::Point => None,
+    }
+}
+
+/// What the in and out ports of frame `id` of `d` show, its text `overflow`ing or not: an arrow
+/// where a frame of its thread comes before (in) or after (out) it, else a red "+" in the out port
+/// of text that doesn't fit, else nothing.
+pub fn port_states(d: &vectorcraft_doc::Document, id: NodeId, overflow: bool) -> (PortState, PortState) {
+    let thread = d.text_threads.iter().find(|t| t.contains(&id));
+    let at = thread.and_then(|t| t.iter().position(|x| *x == id));
+    let input = if at.is_some_and(|i| i > 0) { PortState::Threaded } else { PortState::Empty };
+    let output = match (thread, at) {
+        (Some(t), Some(i)) if i + 1 < t.len() => PortState::Threaded,
+        _ if overflow => PortState::Overflow,
+        _ => PortState::Empty,
+    };
+    (input, output)
+}
+
+/// A port at `c` showing `state`, `px` document units to the screen pixel: a white box outlined in
+/// `color` (the frame's layer colour; red for text that doesn't fit), with a red "+" or an arrow
+/// pointing the way the story flows.
+pub fn push_port(o: &mut Vec<Overlay>, c: Point, state: PortState, color: [u8; 3], px: f64) {
+    let h = PORT_HALF_PX * px;
+    let r = Rect::new(c.x - h, c.y - h, c.x + h, c.y + h);
+    let color = if state == PortState::Overflow { OVERFLOW_RED } else { color };
+    let corners = [Point::new(r.x0, r.y0), Point::new(r.x1, r.y0), Point::new(r.x1, r.y1), Point::new(r.x0, r.y1)];
+    o.push(Overlay::Highlight { quad: corners, color: [255, 255, 255, 255] });
+    o.push(Overlay::Path { path: r.to_path(0.1), color, width: 1.0, dashed: false });
+    let k = 2.5 * px;
+    let line = |a: Point, b: Point| Overlay::Line { a, b, color, dashed: false };
+    match state {
+        PortState::Empty => {}
+        PortState::Overflow => {
+            o.push(line(Point::new(c.x - k, c.y), Point::new(c.x + k, c.y)));
+            o.push(line(Point::new(c.x, c.y - k), Point::new(c.x, c.y + k)));
+        }
+        PortState::Threaded => {
+            let tip = Point::new(c.x + k, c.y);
+            o.push(line(Point::new(c.x - k, c.y), tip));
+            o.push(line(Point::new(c.x, c.y - k), tip));
+            o.push(line(Point::new(c.x, c.y + k), tip));
+        }
+    }
+}
+
+/// The in and out ports of area type or type on a path `t`, frame `id`, its text `overflow`ing or
+/// not ([`port_states`]).
+fn ports(cx: &ToolContext, id: NodeId, t: &TextObject, overflow: bool, o: &mut Vec<Overlay>) {
+    let (input, output) = port_states(cx.doc, id, overflow);
+    let (color, px) = (cx.doc.layer_color(id), cx.tol(1.0));
+    for (port, state) in [(Port::In, input), (Port::Out, output)] {
+        if let Some(c) = port_centre(t, port, px) {
+            push_port(o, c, state, color, px);
+        }
+    }
+}
+
+/// The most selected area type and type on a path whose ports are drawn and take clicks: selecting
+/// all of an opened PDF can select tens of thousands of type objects, whose ports would only bury
+/// the canvas (and the GPU's buffers) in boxes.
+pub const PORTS_MAX: usize = 1_000;
+
+/// The text of `id` in `d` when it has ports: area type or type on a path a thread can hold, not in
+/// perspective ([`crate::select::is_threadable`]). The one test for drawing ports, clicking them and
+/// counting them toward [`PORTS_MAX`].
+pub fn ported(d: &vectorcraft_doc::Document, id: NodeId) -> Option<&TextObject> {
+    match d.node(id).filter(|n| crate::select::is_threadable(n)).map(|n| &n.kind) {
+        Some(NodeKind::Text(t)) => Some(t),
+        _ => None,
+    }
+}
+
+/// Are at most [`PORTS_MAX`] of `selected` [`ported`] (counting stops past it), so that their
+/// ports show?
+pub fn ports_shown(d: &vectorcraft_doc::Document, selected: &[NodeId]) -> bool {
+    selected.iter().filter(|id| ported(d, **id).is_some()).take(PORTS_MAX + 1).count() <= PORTS_MAX
+}
+
+/// The selected area type or type on a path with a port under `p`, and which port: a click on the
+/// out port loads the Selection tool with its text to thread into another frame after it, a click
+/// on the in port to thread into one before it. Every such frame has both ports, threaded,
+/// overflowing or not, while their ports show ([`PORTS_MAX`]).
+pub(crate) fn port_at(cx: &ToolContext, p: Point) -> Option<(NodeId, Port)> {
+    if !ports_shown(cx.doc, &cx.selection.objects) {
+        return None;
+    }
+    let h = cx.tol(PORT_HALF_PX + 1.0);
+    let near = |c: Point| (c.x - p.x).abs() <= h && (c.y - p.y).abs() <= h;
+    cx.selection.objects.iter().find_map(|id| {
+        let t = ported(cx.doc, *id)?;
+        [Port::Out, Port::In].into_iter().find(|port| port_centre(t, *port, cx.tol(1.0)).is_some_and(near)).map(|port| (*id, port))
+    })
+}
+
+/// Which selected text overflows, for [`thread_ports`]: each text object's layout verdict kept
+/// with the object and the fonts it was made from, as overlays run every frame.
+#[derive(Default)]
+pub struct PortMarks {
+    seen: std::collections::HashMap<NodeId, ((u64, TextObject), bool)>,
+}
+
+/// The in and out ports of the selected area type and type on a path, for every tool but the Type
+/// tools (they draw their own): each tells whether the frame is threaded on that side and the out
+/// port whether text is hidden by the size of its frame, whatever tool is active. None when more
+/// than [`PORTS_MAX`] of them are selected.
+pub fn thread_ports(marks: &mut PortMarks, cx: &ToolContext) -> Vec<Overlay> {
+    let fonts = FontDb::global().generation();
+    let mut o = Vec::new();
+    let mut kept = std::collections::HashMap::new();
+    if !ports_shown(cx.doc, &cx.selection.objects) {
+        marks.seen = kept;
+        return o;
+    }
+    for id in &cx.selection.objects {
+        let Some(t) = ported(cx.doc, *id) else { continue };
+        let over = match marks.seen.remove(id) {
+            Some(((g, was), over)) if g == fonts && &was == t => over,
+            _ => vectorcraft_text::layout(FontDb::global(), t).overflow,
+        };
+        ports(cx, *id, t, over, &mut o);
+        kept.insert(*id, ((fonts, t.clone()), over));
+    }
+    marks.seen = kept;
+    o
 }
 
 /// Byte range in `s` of the characters `r` (IME ranges count characters; carets count bytes).
 /// `None` when `r` runs past the end of `s` or backwards.
 /// The `type.step` an Alt+arrow asks for, by one step: ←/→ kerning at a `caret`, else tracking;
 /// ↑/↓ leading (down opens it up); Shift+↑/↓ baseline shift.
-fn step_key(key: ToolKey, shift: bool, caret: bool) -> Option<(&'static str, f64)> {
+pub fn step_key(key: ToolKey, shift: bool, caret: bool) -> Option<(&'static str, f64)> {
     let sign = |up: bool| if up { 1.0 } else { -1.0 };
     Some(match (key, shift) {
         (ToolKey::Left | ToolKey::Right, false) => (if caret { "kerning" } else { "tracking" }, sign(key == ToolKey::Right)),
@@ -364,6 +705,115 @@ fn common_affixes(a: &str, b: &str, max_prefix: usize) -> (usize, usize) {
     (p, s)
 }
 
+/// Byte length of the borrowed plain-text segments.
+fn plain_len(segments: &[&str]) -> usize {
+    segments.iter().map(|s| s.len()).sum()
+}
+
+/// Is `byte` a UTF-8 boundary in the concatenation of `segments`? Run edges are boundaries.
+fn plain_is_boundary(segments: &[&str], byte: usize) -> bool {
+    let mut at = 0usize;
+    for segment in segments {
+        if byte == at {
+            return true;
+        }
+        if byte < at + segment.len() {
+            return segment.is_char_boundary(byte - at);
+        }
+        at += segment.len();
+    }
+    byte == at
+}
+
+/// Append the bytes `start..end` of the concatenation of `segments` to `out`.
+fn copy_plain_range(segments: &[&str], start: usize, end: usize, out: &mut String) {
+    let mut at = 0usize;
+    for segment in segments {
+        let segment_end = at + segment.len();
+        let from = start.max(at);
+        let to = end.min(segment_end);
+        if from < to {
+            let (a, b) = (from - at, to - at);
+            if segment.is_char_boundary(a) && segment.is_char_boundary(b) {
+                out.push_str(&segment[a..b]);
+            }
+        }
+        if segment_end >= end {
+            break;
+        }
+        at = segment_end;
+    }
+}
+
+/// Move `i` back to a character boundary in the concatenation of `segments` (deleting fewer
+/// bytes rather than splitting UTF-8).
+fn plain_floor_boundary(segments: &[&str], mut i: usize) -> usize {
+    i = i.min(plain_len(segments));
+    while i > 0 && !plain_is_boundary(segments, i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Move `i` forward to a character boundary in the concatenation of `segments`.
+fn plain_ceil_boundary(segments: &[&str], mut i: usize) -> usize {
+    let len = plain_len(segments);
+    i = i.min(len);
+    while i < len && !plain_is_boundary(segments, i) {
+        i += 1;
+    }
+    i
+}
+
+/// The byte offset `n` characters before `at` (a boundary) in `segments`, stopping at the start of
+/// the text. Walks the runs, so a large IME deletion count never copies the whole text.
+fn plain_chars_before(segments: &[&str], at: usize, n: usize) -> usize {
+    if n == 0 {
+        return at;
+    }
+    let mut remaining = n;
+    let mut end = plain_len(segments);
+    for segment in segments.iter().rev() {
+        let start = end - segment.len();
+        let local_end = at.min(end).saturating_sub(start);
+        if local_end > 0 && segment.is_char_boundary(local_end) {
+            let before = &segment[..local_end];
+            let count = before.chars().count();
+            if count >= remaining {
+                return start + before.char_indices().rev().nth(remaining.saturating_sub(1)).map_or(0, |(i, _)| i);
+            }
+            remaining -= count;
+        }
+        end = start;
+    }
+    0
+}
+
+/// The byte offset `n` characters after `at` (a boundary) in `segments`, stopping at the end of
+/// the text.
+fn plain_chars_after(segments: &[&str], at: usize, n: usize) -> usize {
+    if n == 0 {
+        return at;
+    }
+    let len = plain_len(segments);
+    let mut remaining = n;
+    let mut acc = 0usize;
+    for segment in segments {
+        let end = acc + segment.len();
+        let local_start = at.saturating_sub(acc);
+        if end > at && segment.is_char_boundary(local_start) {
+            let after = &segment[local_start..];
+            let count = after.chars().count();
+            if count >= remaining {
+                return acc + local_start + after.char_indices().nth(remaining).map_or(after.len(), |(i, _)| i);
+            }
+            remaining -= count;
+        }
+        acc = end;
+    }
+    len
+}
+
 impl Tool for TypeTool {
     fn id(&self) -> &'static str {
         match (self.mode, self.vertical) {
@@ -380,6 +830,10 @@ impl Tool for TypeTool {
     }
     fn wants_text(&self) -> bool {
         self.editing.is_some()
+    }
+    /// Escape while editing is the tool's: it goes on to the Selection tool (#1686).
+    fn claims_key(&self, _: &ToolContext, key: ToolKey) -> bool {
+        key == ToolKey::Escape && self.editing.is_some()
     }
     fn pointer(&mut self, cx: &ToolContext, ev: &PointerEvent) -> Vec<Action> {
         match ev.kind {
@@ -448,7 +902,6 @@ impl Tool for TypeTool {
         if self.editing.is_none() {
             return vec![];
         }
-        let s: String = s.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).map(|c| if c == '\r' { '\n' } else { c }).collect();
         // An IME commit replaces its marked text (an empty commit just removes it).
         let committing = self.preedit.is_some();
         if committing && s.is_empty() {
@@ -458,19 +911,7 @@ impl Tool for TypeTool {
             self.anchor = p.range.start;
             self.caret = p.range.end;
         }
-        if s.is_empty() {
-            return vec![];
-        }
-        // Use Typographer's Quotes (Document Setup): a typed straight quote becomes the document's
-        // opening or closing quote, by the character before it.
-        let setup = &cx.doc.setup;
-        let s = if setup.typographers_quotes && matches!(s.as_str(), "\"" | "'") {
-            let text = self.plain(cx);
-            let mut prev = text.get(..self.caret.min(self.anchor)).and_then(|b| b.chars().next_back());
-            setup.quotes.apply(&s, &mut prev)
-        } else {
-            s
-        };
+        let Some(s) = self.input_text(cx, s) else { return vec![] };
         self.clicks = (None, 0);
         // Pasting what we copied keeps its formatting (unless pasted text is kept plain).
         let clip: String = self.clipboard.iter().map(|r| r.text.as_str()).collect();
@@ -479,6 +920,40 @@ impl Tool for TypeTool {
             return self.replace(cx, "", Some(runs));
         }
         self.replace(cx, &s, None)
+    }
+    /// Would [`Tool::text_input`] change `s` before inserting it? Control characters are dropped,
+    /// `\r` becomes `\n`, Typographer's Quotes rewrites a straight quote, and copied text keeps
+    /// its run styles. An IME commit the application rewrites is an application edit, not an
+    /// accepted IME insertion (its receipt must stay `Other`).
+    fn text_input_is_verbatim(&self, cx: &ToolContext, s: &str) -> bool {
+        if self.editing.is_none() {
+            return true;
+        }
+        if s.is_empty() {
+            return true;
+        }
+        // A straight quote's direction depends on the character before the insertion. During a
+        // commit this check still sees the pre-edit at the caret, while `text_input` replaces it
+        // from its start; with a custom pair whose opening quote is straight, that can look
+        // verbatim here and then be rewritten. Never claim verbatim for one.
+        if cx.doc.setup.typographers_quotes && matches!(s, "\"" | "'") {
+            return false;
+        }
+        let Some(normalized) = self.input_text(cx, s) else { return false };
+        if normalized != s {
+            return false;
+        }
+        let clip: String = self.clipboard.iter().map(|r| r.text.as_str()).collect();
+        !(self.preedit.is_none() && normalized.len() > 1 && normalized == clip && !cx.paste_plain_text)
+    }
+    fn ime_session_matches_document(&self, cx: &ToolContext) -> bool {
+        match (self.editing, &self.typing) {
+            (Some(id), Some(ty)) => Self::text(cx, id).is_none_or(|t| ty.cur == t.runs),
+            // An outside command settled the session: the document may have changed under it, and
+            // the commit that starts a new session cannot claim the IME made that change.
+            (Some(_), None) => !self.typing_ended,
+            _ => true,
+        }
     }
     fn key(&mut self, cx: &ToolContext, key: ToolKey, mods: Mods) -> Vec<Action> {
         // The IME owns the keys while it composes (the UI doesn't send them; this is a guard).
@@ -522,7 +997,15 @@ impl Tool for TypeTool {
             self.goal_x = None;
         }
         match key {
-            ToolKey::Escape => self.finish(cx),
+            // Escape ends editing and goes back to the tool used before double-clicking into type
+            // (or to the Selection tool by default), the type selected: the keyboard is free for
+            // tool shortcuts again (#1686).
+            ToolKey::Escape => {
+                let target = self.prev_tool.take().unwrap_or_else(|| "selection".into());
+                let mut out = self.finish(cx);
+                out.push(Action::SwitchTool(target));
+                out
+            }
             ToolKey::Enter => self.replace(cx, "\n", None),
             ToolKey::Tab => self.replace(cx, "\t", None),
             ToolKey::Backspace | ToolKey::Delete if a != b => self.replace(cx, "", None),
@@ -549,7 +1032,7 @@ impl Tool for TypeTool {
                     edit::prev_word(&text, self.caret)
                 } else {
                     if lay.glyphs.iter().any(|g| g.rtl) {
-                        vectorcraft_text::caret_horizontal(&lay, self.caret, false)
+                        vectorcraft_text::caret_horizontal_cluster(&lay, &text, self.caret, false)
                     } else {
                         edit::prev_cluster(&text, self.caret)
                     }
@@ -569,7 +1052,7 @@ impl Tool for TypeTool {
                     edit::next_word(&text, self.caret)
                 } else {
                     if lay.glyphs.iter().any(|g| g.rtl) {
-                        vectorcraft_text::caret_horizontal(&lay, self.caret, true)
+                        vectorcraft_text::caret_horizontal_cluster(&lay, &text, self.caret, true)
                     } else {
                         edit::next_cluster(&text, self.caret)
                     }
@@ -638,6 +1121,102 @@ impl Tool for TypeTool {
         self.preedit = Some(Preedit { range: start..end, active: active_chars.and_then(|r| char_range_to_bytes(&text, r)) });
         out
     }
+    fn ime_delete_surrounding(&mut self, cx: &ToolContext, before: usize, after: usize, unit: SurroundingUnit) -> Vec<Action> {
+        let Some(id) = self.editing else { return vec![] };
+        // The document changed under the session (undo, a panel edit): the ranges below would index
+        // text that is no longer there. The commit that follows resets the session; do not delete
+        // from the wrong text in the meantime.
+        if let Some(t) = Self::text(cx, id)
+            && self.typing.as_ref().is_some_and(|ty| ty.cur != t.runs)
+        {
+            return vec![];
+        }
+        // Walk the runs in place: joining the whole edited text here would copy a large document
+        // for every IME deletion event, though only the characters next to the selection matter.
+        let Some(segments) = self.plain_segments(cx) else { return vec![] };
+        let len = plain_len(&segments);
+        // The text the IME's following commit replaces (the selection, or the marked text while
+        // composing). The surrounding deletion never removes it: it deletes only the bytes/characters
+        // before and after it, preserving the selection direction and the composition.
+        let (raw_start, raw_end) = match &self.preedit {
+            Some(p) => (p.range.start.min(len), p.range.end.min(len)),
+            None => (self.caret.min(self.anchor).min(len), self.caret.max(self.anchor).min(len)),
+        };
+        let (before_start, start, end, after_end) = match unit {
+            SurroundingUnit::Bytes => {
+                // Inward rounding: a count ending inside a scalar leaves that scalar whole. The
+                // preceding side moves its start forward (ceil), the following side moves its end
+                // backward (floor). Do not reverse these: that would delete part of a character.
+                let start = plain_floor_boundary(&segments, raw_start);
+                let end = plain_ceil_boundary(&segments, raw_end);
+                let before_start = plain_ceil_boundary(&segments, start.saturating_sub(before));
+                let after_end = plain_floor_boundary(&segments, end.saturating_add(after));
+                (before_start, start, end, after_end)
+            }
+            SurroundingUnit::Chars => {
+                let start = plain_floor_boundary(&segments, raw_start);
+                let end = plain_ceil_boundary(&segments, raw_end);
+                let before_start = plain_chars_before(&segments, start, before);
+                let after_end = plain_chars_after(&segments, end, after);
+                (before_start, start, end, after_end)
+            }
+        };
+        let mut ranges = Vec::with_capacity(2);
+        if before_start < start {
+            ranges.push((before_start, start));
+        }
+        if end < after_end {
+            ranges.push((end, after_end));
+        }
+        if ranges.is_empty() {
+            return vec![];
+        }
+        self.delete_ranges(cx, &ranges)
+    }
+    fn ime_target(&self, cx: &ToolContext) -> Option<(u64, u64, u64)> {
+        let id = self.editing?;
+        Self::text(cx, id)?;
+        Some((cx.revision.0, id.0, self.edit_session))
+    }
+    fn ime_surrounding(&self, cx: &ToolContext, max_bytes: usize) -> ImeSurrounding {
+        let Some(id) = self.editing else {
+            return ImeSurrounding::Unavailable("no text object is being edited");
+        };
+        let Some(current) = Self::text(cx, id) else {
+            return ImeSurrounding::Unavailable("the edited text object is gone");
+        };
+        // The document changed under the typing session (undo, a panel or control edit): the
+        // session's runs, marked-text range and caret offsets no longer describe the document.
+        // Publish the document's own text (never the stale session's, which the IME cannot see);
+        // the marked text has no range in it, so it is excluded from the logical view. The
+        // commit-time check (`ime_session_matches_document`) reports the reset as application
+        // origin instead of letting a receipt describe the wrong text.
+        let stale = self.typing.as_ref().is_some_and(|ty| ty.cur != current.runs);
+        if self.preedit.is_some() && self.typing.is_none() {
+            return ImeSurrounding::Unavailable("the IME pre-edit has no typing session");
+        }
+        let Some(segments) = self.plain_segments(cx) else {
+            return ImeSurrounding::Unavailable("the edited text object is gone");
+        };
+        let len = plain_len(&segments);
+        let caret = self.caret.min(len);
+        let anchor = self.anchor.min(len);
+        if !plain_is_boundary(&segments, caret) || !plain_is_boundary(&segments, anchor) {
+            return ImeSurrounding::Unavailable("the caret or selection anchor is not a UTF-8 boundary");
+        }
+        let preedit = match self.preedit.as_ref().filter(|_| !stale) {
+            Some(p) => {
+                let start = p.range.start.min(len);
+                let end = p.range.end.min(len);
+                if start > end || !plain_is_boundary(&segments, start) || !plain_is_boundary(&segments, end) {
+                    return ImeSurrounding::Unavailable("the IME pre-edit is not on UTF-8 boundaries");
+                }
+                Some(start..end)
+            }
+            None => None,
+        };
+        ime_surrounding_window(&segments, preedit, len, caret, anchor, max_bytes)
+    }
     fn composing(&self) -> bool {
         self.preedit.is_some()
     }
@@ -654,6 +1233,7 @@ impl Tool for TypeTool {
         Some((t.xf * a, t.xf * b))
     }
     fn deactivate(&mut self, cx: &ToolContext) -> Vec<Action> {
+        self.prev_tool = None;
         self.finish(cx)
     }
     /// Editing ends when a command takes the text out of the selection (Deselect, another object
@@ -688,18 +1268,43 @@ impl Tool for TypeTool {
             Some(id) => {
                 // Offsets may exceed the text after Select All; callers clamp to the text length.
                 let (a, b) = self.sel();
-                json!({"editing": id.0, "start": a, "end": b, "caret": self.caret, "anchor": self.anchor, "typing": self.typing.is_some(), "composing": self.preedit.is_some()})
+                json!({
+                    "editing": id.0,
+                    "start": a,
+                    "end": b,
+                    "caret": self.caret,
+                    "anchor": self.anchor,
+                    "typing": self.typing.is_some(),
+                    "composing": self.preedit.is_some(),
+                    "prevTool": self.prev_tool,
+                })
             }
-            None => json!({"editing": null}),
+            None => json!({"editing": null, "prevTool": self.prev_tool}),
         }
     }
     /// `select {start, end}` / `selectAll` / `copy` (with `runs` of the selection) /
     /// `commitTyping` (the caller commits the engine interaction).
     fn set_option(&mut self, key: &str, v: &Value) {
         match key {
+            // Transient selection transferred between Type and Eyedropper; never a saved setting.
+            "textSelection" => {
+                if let (Some(id), Some(a), Some(b)) = (
+                    v.get("editing").and_then(Value::as_u64),
+                    v.get("anchor").or_else(|| v.get("start")).and_then(Value::as_u64),
+                    v.get("caret").or_else(|| v.get("end")).and_then(Value::as_u64),
+                ) && let (Ok(a), Ok(b)) = (usize::try_from(a), usize::try_from(b))
+                {
+                    self.start_editing(NodeId(id), b);
+                    self.anchor = a;
+                }
+            }
+            "prevTool" | "previousTool" => {
+                self.prev_tool = v.as_str().map(String::from);
+            }
             "commitTyping" | "endTyping" => {
                 self.typing = None;
                 self.preedit = None;
+                self.typing_ended = true;
             }
             "selectAll" if self.editing.is_some() => {
                 self.anchor = 0;
@@ -721,6 +1326,7 @@ impl Tool for TypeTool {
                 self.typing = None;
                 self.preedit = None;
                 self.editing = None;
+                self.prev_tool = None;
             }
             _ => {}
         }
@@ -728,16 +1334,36 @@ impl Tool for TypeTool {
     fn overlays(&self, cx: &ToolContext) -> Vec<Overlay> {
         let mut o = self.snap.guides().to_vec();
         if let (Some((_, s)), Some(d)) = (self.press, self.drag) {
-            o.push(Overlay::Marquee(Rect::from_points(s, d)));
-        }
-        // Overflow markers on selected text.
-        for id in &cx.selection.objects {
-            if Some(*id) == self.editing {
-                continue;
+            // The area being drawn (along the Constrain Angle's axes when one is set, as `on_up`
+            // makes it) and its size.
+            let size = match vectorcraft_geom::constrain_axes(cx.constrain_angle) {
+                None => {
+                    let r = Rect::from_points(s, d);
+                    o.push(Overlay::Marquee(r));
+                    r.size()
+                }
+                Some(axes) => {
+                    let back = axes.inverse();
+                    let r = Rect::from_points(back * s, back * d);
+                    let mut path = r.to_path(0.1);
+                    path.apply_affine(axes);
+                    o.push(Overlay::Path { path, color: [79, 128, 255], width: 1.0, dashed: true });
+                    r.size()
+                }
+            };
+            if cx.measurement_labels {
+                o.push(Overlay::Measure { p: d, text: cx.size_label(size.width, size.height) });
             }
-            if let Some(t) = Self::text(cx, *id) {
-                let lay = self.layout(t);
-                Self::overflow_marker(t, &lay, cx, &mut o);
+        }
+        // The ports of selected area type and type on a path, as many as show ([`PORTS_MAX`]), the
+        // edited one's included.
+        let shown = ports_shown(cx.doc, &cx.selection.objects);
+        if shown {
+            for id in cx.selection.objects.iter().filter(|id| Some(**id) != self.editing) {
+                if let Some(t) = ported(cx.doc, *id) {
+                    let lay = self.layout(t);
+                    ports(cx, *id, t, lay.overflow, &mut o);
+                }
             }
         }
         let Some(t) = self.current(cx) else { return o };
@@ -779,15 +1405,101 @@ impl Tool for TypeTool {
                 o.push(Overlay::Highlight { quad: q.map(|p| t.xf * p), color: [60, 120, 255, 90] });
             }
         }
-        Self::overflow_marker(&t, &lay, cx, &mut o);
+        if let Some(id) = self.editing.filter(|id| shown && ported(cx.doc, *id).is_some()) {
+            ports(cx, id, &t, lay.overflow, &mut o);
+        }
         o
     }
     fn cursor(&self, cx: &ToolContext, p: Point, _m: Mods) -> Cursor {
         if self.mode != Mode::Type && Self::path_at(cx, p, self.mode == Mode::Area).is_some() {
             return Cursor::Crosshair;
         }
-        Cursor::Text
+        if self.vertical { Cursor::TypeVertical } else { Cursor::Text }
     }
+}
+
+/// The logical IME surrounding window: the pre-edit is removed and the caret/anchor offsets
+/// are remapped around it. `preedit` has already been validated against `segments`.
+fn ime_surrounding_window(
+    segments: &[&str],
+    preedit: Option<Range<usize>>,
+    len: usize,
+    caret: usize,
+    anchor: usize,
+    max_bytes: usize,
+) -> ImeSurrounding {
+    let removed = preedit.as_ref().map_or(0, |r| r.end - r.start);
+    let logical_len = len - removed;
+    let to_logical = |byte: usize| -> usize {
+        match &preedit {
+            Some(r) if byte > r.start && byte < r.end => r.start,
+            Some(r) if byte >= r.end => byte - removed,
+            _ => byte,
+        }
+    };
+    let cursor = to_logical(caret);
+    let anchor = to_logical(anchor);
+    let selection_start = cursor.min(anchor);
+    let selection_end = cursor.max(anchor);
+    let selection_len = selection_end - selection_start;
+    if selection_len > max_bytes {
+        return ImeSurrounding::Unavailable("the selection is wider than the IME surrounding-text limit");
+    }
+    let budget = max_bytes - selection_len;
+    let before_available = selection_start;
+    let after_available = logical_len - selection_end;
+    let mut before = (budget / 2).min(before_available);
+    let mut after = (budget - before).min(after_available);
+    before = (budget - after).min(before_available);
+    after = (budget - before).min(after_available);
+    let mut window_start = selection_start - before;
+    let mut window_end = selection_end + after;
+    let logical_boundary = |byte: usize| -> bool {
+        match &preedit {
+            Some(r) if byte == r.start => true,
+            Some(r) if byte < r.start => plain_is_boundary(segments, byte),
+            Some(_) => plain_is_boundary(segments, byte + removed),
+            None => plain_is_boundary(segments, byte),
+        }
+    };
+    while window_start < selection_start && !logical_boundary(window_start) {
+        window_start += 1;
+    }
+    while selection_end < window_end && !logical_boundary(window_end) {
+        window_end -= 1;
+    }
+    let to_original = |byte: usize| -> usize {
+        match &preedit {
+            Some(r) if byte > r.start => byte + removed,
+            _ => byte,
+        }
+    };
+    let original_start = to_original(window_start);
+    let original_end = to_original(window_end);
+    let mut text = String::with_capacity(window_end - window_start);
+    match &preedit {
+        Some(r) => {
+            if window_start < r.start {
+                let first_end = original_end.min(r.start);
+                if original_start < first_end {
+                    copy_plain_range(segments, original_start, first_end, &mut text);
+                }
+            }
+            if r.start < window_end {
+                let second_start = r.end.max(original_start);
+                if second_start < original_end {
+                    copy_plain_range(segments, second_start, original_end, &mut text);
+                }
+            }
+        }
+        None => {
+            if original_start < original_end {
+                copy_plain_range(segments, original_start, original_end, &mut text);
+            }
+        }
+    }
+    debug_assert_eq!(text.len(), window_end - window_start, "removing the pre-edit must preserve the logical window length");
+    ImeSurrounding::Available { text, cursor: cursor - window_start, anchor: anchor - window_start }
 }
 
 #[cfg(test)]

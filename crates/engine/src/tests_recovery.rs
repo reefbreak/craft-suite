@@ -88,6 +88,22 @@ fn recovery_save_writes_modified_documents_once() {
     assert!(offered(&mut s).is_empty());
 }
 
+/// Selecting other art drops the Puppet Warp pins, which a copy never holds: no new copy is written.
+#[test]
+fn dropping_puppet_warp_pins_writes_no_new_copy() {
+    let (mut s, _) = session();
+    let id = s.doc().unwrap().selection.objects[0];
+    s.execute("object.puppetWarp", &json!({"id": id.0, "pins": [[35, 20]], "moved": [[35, 20]], "rest": true})).unwrap();
+    assert!(s.doc().unwrap().doc.puppet.is_some());
+    let r = s.execute("file.recovery.save", &json!({})).unwrap();
+    assert_eq!(r["saved"].as_array().unwrap().len(), 1, "{r}");
+    s.execute("select.none", &json!({})).unwrap();
+    assert!(s.doc().unwrap().doc.puppet.is_none());
+    let again = s.execute("file.recovery.save", &json!({})).unwrap();
+    assert!(again["saved"].as_array().unwrap().is_empty(), "{again}");
+    assert_eq!(again["skipped"][0]["reason"], "unchanged since its last recovery copy");
+}
+
 #[test]
 fn a_crash_leaves_copies_that_restore_modified_and_titled() {
     let (mut s, store) = session();
@@ -120,6 +136,33 @@ fn a_crash_leaves_copies_that_restore_modified_and_titled() {
     // Restored once: nothing is left to restore.
     assert_eq!(restored(s.execute("file.recovery.restore", &json!({})).unwrap()), 0);
     assert!(s.execute("file.recovery.restore", &json!({"file": format!("{mine}/Poster-1")})).is_err(), "an open document's copy");
+}
+
+/// A threaded frame whose first paragraph continues from the frame before is restored without
+/// that paragraph's first-line indent.
+#[test]
+fn a_restored_copy_keeps_continued_paragraphs_in_threaded_frames() {
+    let store = Arc::new(MemoryStore::default());
+    let mut s = relaunch(&store);
+    s.execute("file.new", &json!({"width": 600, "height": 300})).unwrap();
+    let story = "The quick brown fox jumps over the lazy dog and keeps running far beyond the first frame of this story. ".repeat(4);
+    let a =
+        s.execute("text.create", &json!({"x": 10, "y": 10, "text": story, "area": {"width": 150, "height": 60}})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("shape.rectangle", &json!({"x": 200, "y": 10, "width": 150, "height": 200})).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({"ids": [a, b]})).unwrap();
+    s.execute("text.thread.create", &json!({})).unwrap();
+    s.execute("text.setFormat", &json!({"ids": [a, b], "leftIndent": 0, "firstLineIndent": 24})).unwrap();
+    let continues = |s: &Session| match &s.doc().unwrap().doc.node(vectorcraft_doc::NodeId(b)).unwrap().kind {
+        vectorcraft_doc::NodeKind::Text(t) => t.first_para_continues,
+        _ => panic!("not text"),
+    };
+    assert!(continues(&s));
+    s.execute("file.recovery.save", &json!({})).unwrap();
+    drop(s);
+
+    let mut s = relaunch(&store);
+    assert_eq!(restored(s.execute("file.recovery.restore", &json!({})).unwrap()), 1);
+    assert!(continues(&s), "the second frame continues the first frame's paragraph");
 }
 
 #[test]
@@ -345,6 +388,33 @@ fn folder_areas_are_locked_by_running_apps() {
     cmd::recovery::forget_all(&mut b);
     assert!(!dir.join(&mine).exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The copies are unsaved documents: on Unix the folders the store makes are owner-only, and a
+/// store folder that already exists (one picked in Preferences) keeps its mode.
+#[cfg(unix)]
+#[test]
+fn the_folder_store_makes_owner_only_folders() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let base = std::env::temp_dir().join(format!("vc-recovery-modes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    // A store folder that doesn't exist yet is made with the first copy, owner-only like its area.
+    let new = base.join("new");
+    let store = FolderStore::new(&new);
+    store.write("1-1/Untitled-1-1.vectorcraft", b"copy").unwrap();
+    assert_eq!(mode(&new), 0o700);
+    assert_eq!(mode(&new.join("1-1")), 0o700);
+    assert!(matches!(store.lock("1-2"), Ok(cmd::recovery::Lock::Held(_))));
+    assert_eq!(mode(&new.join("1-2")), 0o700);
+    // A folder that already exists keeps its mode; the area made inside it is owner-only.
+    let picked = base.join("picked");
+    std::fs::create_dir_all(&picked).unwrap();
+    std::fs::set_permissions(&picked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    FolderStore::new(&picked).write("2-1/Untitled-1-1.vectorcraft", b"copy").unwrap();
+    assert_eq!(mode(&picked), 0o755);
+    assert_eq!(mode(&picked.join("2-1")), 0o700);
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]

@@ -3,27 +3,31 @@
 //! The 2D art is the front of the solid: its outline is extruded backwards along the view's
 //! z-axis, about the centre of its bounds, at the art's own position and size. Planar faces (caps
 //! and the rotated plane) are drawn whole, holes included, so no triangulation is needed; curved
-//! faces (bevels, side walls under twist or taper, inflated surfaces) are cut into small facets
-//! and flat shaded, like Revolve.
+//! faces are cut into small facets. Colored Inflate interpolates shared membrane normals;
+//! bevels and side walls retain their planar lighting.
 //!
 //! Visibility is a painter's algorithm, as for Revolve: faces of a closed solid that face away
 //! from the viewer are left out, the rest are drawn back to front.
 
-use vectorcraft_geom::{BezPath, ParamCurve, PathData, Point, Rect};
+use vectorcraft_geom::{BezPath, FillRule, ParamCurve, PathData, Point, Rect, Vec2};
 
-use crate::{MAX_FACES, Revolve, V3};
+use crate::{MAX_FACES, Revolve, V3, eye_distance, perspective_scale};
 
-/// The view shared by every 3D effect: rotation, perspective and one directional light.
+/// The view shared by every 3D effect: rotation, perspective and directional lighting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
     pub rotation_x: f64,
     pub rotation_y: f64,
     pub rotation_z: f64,
-    /// Perspective strength, 0 for orthographic projection, up to 1.
+    /// Perspective, 0° (none) to 160°, as Revolve's.
     pub perspective: f64,
-    pub light_azimuth: f64,
-    pub light_elevation: f64,
+    pub light_rotation: f64,
+    pub light_height: f64,
+    pub light_behind: bool,
+    pub light_color: [f64; 3],
     pub light_intensity: f64,
+    pub light_softness: f64,
+    pub lights: Option<crate::Lights>,
     pub ambient: f64,
     pub shade: bool,
 }
@@ -36,9 +40,13 @@ impl Default for View {
             rotation_y: r.rotation_y,
             rotation_z: r.rotation_z,
             perspective: r.perspective,
-            light_azimuth: r.light_azimuth,
-            light_elevation: r.light_elevation,
+            light_rotation: r.light_rotation,
+            light_height: r.light_height,
+            light_behind: r.light_behind,
+            light_color: r.light_color,
             light_intensity: r.light_intensity,
+            light_softness: r.light_softness,
+            lights: r.lights,
             ambient: r.ambient,
             shade: r.shade,
         }
@@ -46,6 +54,12 @@ impl Default for View {
 }
 
 impl View {
+    /// Whether the active light setup needs RGB shading rather than neutral brightness.
+    pub fn has_colored_lights(self) -> bool {
+        let view = self.revolve();
+        view.lights.map_or(view.light_color != [1.0; 3], |lights| lights.iter().any(|light| light.color != [1.0; 3]))
+    }
+
     /// The same rotation, projection and lighting maths as Revolve's.
     fn revolve(self) -> Revolve {
         Revolve {
@@ -53,9 +67,13 @@ impl View {
             rotation_y: self.rotation_y,
             rotation_z: self.rotation_z,
             perspective: self.perspective,
-            light_azimuth: self.light_azimuth,
-            light_elevation: self.light_elevation,
+            light_rotation: self.light_rotation,
+            light_height: self.light_height,
+            light_behind: self.light_behind,
+            light_color: self.light_color,
             light_intensity: self.light_intensity,
+            light_softness: self.light_softness,
+            lights: self.lights,
             ambient: self.ambient,
             shade: self.shade,
             ..Revolve::default()
@@ -161,7 +179,7 @@ impl Default for Bevel {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Extrude {
     pub depth: f64,
-    /// The turn of the back face against the front, about the shape's centre.
+    /// The turn of the back face against the front, about the shape's centre: 0° to 360°.
     pub twist: f64,
     /// The size of the back face, as a share (0.01..1) of the front's.
     pub taper: f64,
@@ -185,20 +203,32 @@ pub struct Inflate {
     pub volume: f64,
     /// Puff the back out too; otherwise it stays flat.
     pub both_sides: bool,
+    /// The turn of the back against the front, about the shape's centre: 0° to 360°.
+    pub twist: f64,
+    /// The size of the back, as a share (0.01..1) of the front's.
+    pub taper: f64,
+    /// A closed back (a solid) or none, so the inflated front is a shell open behind.
+    pub cap: bool,
 }
 
 impl Default for Inflate {
     fn default() -> Self {
-        Self { depth: 0.0, volume: 50.0, both_sides: false }
+        Self { depth: 0.0, volume: 50.0, both_sides: false, twist: 0.0, taper: 1.0, cap: true }
     }
 }
 
-/// One projected, flat-shaded polygon. Holes are contours of their own (nonzero winding).
+/// One projected polygon. Holes are contours of their own (nonzero winding).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Facet {
     pub contours: Vec<Vec<Point>>,
     pub depth: f64,
     pub brightness: f64,
+    pub illumination: [f64; 3],
+    /// Smooth lighting on an inflated triangle, before clipping individual RGB channels.
+    pub rgb_gradient: Option<crate::RgbGradient>,
+    /// The contours in view space, before projection, for tests that measure depths.
+    #[cfg(test)]
+    view: Vec<Vec<V3>>,
 }
 
 impl Facet {
@@ -233,7 +263,7 @@ impl Extrude {
     fn sanitized(self) -> Self {
         Self {
             depth: finite(self.depth, 50.0, 0.0, 2000.0),
-            twist: finite(self.twist, 0.0, -360.0, 360.0),
+            twist: finite(self.twist, 0.0, 0.0, 360.0),
             taper: finite(self.taper, 1.0, 0.01, 1.0),
             bevel: self.bevel.map(|b| Bevel {
                 width: finite(b.width, 4.0, 0.0, 1000.0),
@@ -249,7 +279,13 @@ impl Extrude {
 
 impl Inflate {
     fn sanitized(self) -> Self {
-        Self { depth: finite(self.depth, 0.0, 0.0, 2000.0), volume: finite(self.volume, 50.0, 0.0, 100.0), ..self }
+        Self {
+            depth: finite(self.depth, 0.0, 0.0, 2000.0),
+            volume: finite(self.volume, 50.0, 0.0, 100.0),
+            twist: finite(self.twist, 0.0, 0.0, 360.0),
+            taper: finite(self.taper, 1.0, 0.01, 1.0),
+            ..self
+        }
     }
 }
 
@@ -258,6 +294,8 @@ impl Inflate {
 const MAX_SOLID_POINTS: usize = 2048;
 /// Outline points Rotate samples at most: it only turns the outline, so an outlined paragraph fits.
 const MAX_PLANE_POINTS: usize = 65536;
+/// Pieces a twisted wall's strip is cut into along one edge at most.
+const MAX_PIECES: usize = 64;
 
 /// How many straight pieces follow `c` within `tolerance` (Wang's bound on a cubic's distance from
 /// its chords), 1 to 32.
@@ -272,7 +310,11 @@ fn pieces(c: vectorcraft_geom::CubicBez, tolerance: f64) -> u32 {
 /// outlines run one way and holes the other, so nonzero winding fills them as the art is. Curves
 /// are followed within a tolerance of 1/2000 of `size` (at least 0.05 pt), so small curves take
 /// few points and large ones more; more than `limit` points in all is refused.
-fn rings(path: &PathData, size: f64, limit: usize) -> Result<Vec<Vec<Point>>, String> {
+///
+/// Under the nonzero `rule` an outline with filled art on both sides is no edge of the shape and
+/// is left out: a contour inside another that runs the same way doesn't cut a hole, as it would
+/// if nesting alone decided (#1724).
+fn rings(path: &PathData, rule: FillRule, size: f64, limit: usize) -> Result<Vec<Vec<Point>>, String> {
     let tolerance = (size / 2000.0).max(0.05);
     let mut count = 0;
     let mut out = vec![];
@@ -307,15 +349,45 @@ fn rings(path: &PathData, size: f64, limit: usize) -> Result<Vec<Vec<Point>>, St
             out.push(ring);
         }
     }
+    // Which rings hold which: each ring against the others, its edges walked only where its
+    // bounds hold the point, and within [`MAX_CONTAINMENT_EDGES`] edges in all.
+    let too_complex = || String::from("The shape is too complex for a 3D effect");
+    let mut work = 0usize;
+    let mut within = |out: &[Vec<Point>], bounds: &[Rect], i: usize| -> Result<Vec<usize>, String> {
+        let p = out.get(i).and_then(|r| r.first()).copied().unwrap_or_default();
+        let mut held_by = vec![];
+        for (j, (o, b)) in out.iter().zip(bounds).enumerate() {
+            if j == i || !(b.x0 <= p.x && p.x <= b.x1 && b.y0 <= p.y && p.y <= b.y1) {
+                continue;
+            }
+            work = work.saturating_add(o.len());
+            if work > MAX_CONTAINMENT_EDGES {
+                return Err(too_complex());
+            }
+            if contains(o, p) {
+                held_by.push(j);
+            }
+        }
+        Ok(held_by)
+    };
+    let bounds_of = |out: &[Vec<Point>]| -> Vec<Rect> {
+        out.iter().map(|r| r.iter().map(|q| Rect::from_points(*q, *q)).reduce(|a, b| a.union(b)).unwrap_or_default()).collect()
+    };
+    if rule == FillRule::NonZero {
+        let turn = |r: &[Point]| if signed_area(r) > 0.0 { 1 } else { -1 };
+        let bounds = bounds_of(&out);
+        let mut edge = Vec::with_capacity(out.len());
+        for (i, r) in out.iter().enumerate() {
+            // The winding number just outside the ring, and just inside it.
+            let outside: i32 = within(&out, &bounds, i)?.into_iter().filter_map(|j| out.get(j)).map(|o| turn(o)).sum();
+            edge.push((outside != 0) != (outside + turn(r) != 0));
+        }
+        let mut edge = edge.into_iter();
+        out.retain(|_| edge.next().unwrap_or(true));
+    }
     // A ring inside an odd number of others is a hole.
-    let holes: Vec<bool> = out
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let p = r.first().copied().unwrap_or_default();
-            out.iter().enumerate().filter(|(j, o)| *j != i && contains(o, p)).count() % 2 == 1
-        })
-        .collect();
+    let bounds = bounds_of(&out);
+    let holes: Vec<bool> = (0..out.len()).map(|i| within(&out, &bounds, i).map(|held| held.len() % 2 == 1)).collect::<Result<_, _>>()?;
     for (r, hole) in out.iter_mut().zip(holes) {
         if (signed_area(r) > 0.0) == hole {
             r.reverse();
@@ -323,6 +395,10 @@ fn rings(path: &PathData, size: f64, limit: usize) -> Result<Vec<Vec<Point>>, St
     }
     Ok(out)
 }
+
+/// Most ring edges [`rings`] walks to tell which rings hold which: every ring is tested against
+/// the others, so many rings of many points each would otherwise take billions of steps.
+const MAX_CONTAINMENT_EDGES: usize = 50_000_000;
 
 fn signed_area(r: &[Point]) -> f64 {
     r.iter().zip(r.iter().cycle().skip(1)).take(r.len()).map(|(a, b)| a.x * b.y - b.x * a.y).sum::<f64>() / 2.0
@@ -377,7 +453,10 @@ fn inset(ring: &[Point], w: f64) -> Vec<Point> {
 struct Camera {
     view: Revolve,
     origin: Point,
-    distance: f64,
+    /// The eye's distance in front of the centre; `None` without perspective.
+    eye: Option<f64>,
+    /// Deeper than any part of the object: faces drawn first go this far behind it.
+    far: f64,
     light: V3,
 }
 
@@ -386,7 +465,7 @@ impl Camera {
         let view = view.revolve();
         let [lx, ly, lz] = view.light_direction();
         let size = (bounds.width() / 2.0).max(bounds.height() / 2.0).max(depth / 2.0).max(1.0);
-        Self { view, origin: bounds.center(), distance: 4.0 * size, light: V3(lx, ly, lz) }
+        Self { view, origin: bounds.center(), eye: eye_distance(view.perspective, size), far: 16.0 * size, light: V3(lx, ly, lz) }
     }
     fn rotate(&self, v: V3) -> V3 {
         self.view.rotate(v)
@@ -396,17 +475,17 @@ impl Camera {
         self.rotate(V3(p.x - self.origin.x, p.y - self.origin.y, z))
     }
     fn project(&self, v: V3) -> Point {
-        let f = self.distance / (self.distance - v.2 * self.view.perspective);
+        let f = perspective_scale(self.eye, v.2);
         Point::new(self.origin.x + v.0 * f, self.origin.y + v.1 * f)
     }
     /// The cosine between a face's outward unit normal `n` and the direction from `at` (both in
     /// view space) to the eye: positive when the face is turned towards the viewer.
     fn facing(&self, at: V3, n: V3) -> f64 {
-        let to_eye = if self.view.perspective > 0.0 { V3(0.0, 0.0, self.distance / self.view.perspective).sub(at).unit() } else { V3(0.0, 0.0, 1.0) };
+        let to_eye = self.eye.map_or(V3(0.0, 0.0, 1.0), |e| V3(0.0, 0.0, e).sub(at).unit());
         n.dot(to_eye)
     }
     fn brightness(&self, n: V3) -> f64 {
-        if self.view.shade { (self.view.ambient + self.view.light_intensity * n.dot(self.light).max(0.0)).clamp(0.0, 1.0) } else { 1.0 }
+        crate::brightness(&self.view, n, self.light)
     }
 }
 
@@ -419,9 +498,25 @@ struct Builder<'a> {
     facets: Vec<Facet>,
 }
 
+/// Where a face goes in the order the facets are drawn, back to front.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Order {
+    /// The face is sorted by the depth of its center, except that a face seen almost edge-on goes
+    /// first, under everything.
+    Depth,
+    /// The face is sorted by the depth of its center even when it is seen almost edge-on, so that
+    /// a piece of a twisted wall at the solid's outline covers the walls behind it.
+    Twisted,
+    /// The face is drawn after every other face when it is turned toward the viewer. A flat end of
+    /// the solid has the whole solid behind its plane, so it covers whatever it overlaps. Its depth
+    /// is `f64::MAX`, so the faces drawn last by several solids sorted together keep the order they
+    /// were added in.
+    Last,
+}
+
 impl Builder<'_> {
-    /// Add a face of view-space contours with outward normal `n` (view space).
-    fn face(&mut self, contours: Vec<Vec<V3>>, n: V3) -> Result<(), String> {
+    /// Add a face of view-space contours with outward normal `n` (view space), drawn in `order`.
+    fn face(&mut self, contours: Vec<Vec<V3>>, n: V3, order: Order) -> Result<(), String> {
         let count: usize = contours.iter().map(Vec::len).sum();
         if count < 3 {
             return Ok(());
@@ -430,9 +525,10 @@ impl Builder<'_> {
         let centre = V3(centre.0 / count as f64, centre.1 / count as f64, centre.2 / count as f64);
         let n = n.unit();
         let facing = self.camera.facing(centre, n);
-        // A closed solid hides the faces turned away. One seen almost exactly edge-on is kept but
-        // drawn first, under everything: on a curved surface rounding alone turns such faces
-        // either way, and dropping every other one would leave gaps.
+        // A closed solid hides the faces turned away. One seen almost exactly edge-on is kept and,
+        // unless it is a piece of a twisted wall, drawn first, under everything: on a curved
+        // surface rounding alone turns such faces either way, and dropping every other one would
+        // leave gaps.
         let (n, behind) = if facing > 0.0 {
             (n, false)
         } else if self.closed && facing > -0.02 {
@@ -442,6 +538,8 @@ impl Builder<'_> {
         } else {
             (V3(-n.0, -n.1, -n.2), false)
         };
+        #[cfg(test)]
+        let view = contours.clone();
         let contours: Vec<Vec<Point>> = contours.iter().map(|c| c.iter().map(|v| self.camera.project(*v)).collect()).collect();
         if contours.iter().flatten().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
             return Err("The 3D projection is not finite".into());
@@ -449,32 +547,85 @@ impl Builder<'_> {
         if contours.iter().map(|c| signed_area(c).abs()).sum::<f64>() < 1e-10 {
             return Ok(());
         }
-        let depth = if behind { centre.2 - 4.0 * self.camera.distance } else { centre.2 };
-        self.facets.push(Facet { contours, depth, brightness: self.camera.brightness(n) });
+        let depth = if behind && order != Order::Twisted {
+            centre.2 - self.camera.far
+        } else if order == Order::Last && facing > 0.0 {
+            f64::MAX
+        } else {
+            centre.2
+        };
+        self.facets.push(Facet {
+            contours,
+            depth,
+            brightness: self.camera.brightness(n),
+            illumination: crate::illumination(&self.camera.view, n, self.camera.light),
+            rgb_gradient: None,
+            #[cfg(test)]
+            view,
+        });
         if self.facets.len() > MAX_FACES {
             return Err("The 3D surface is too complex; simplify the shape".into());
         }
         Ok(())
     }
 
-    /// The band between two partner rings (same length), as one quad per edge. `outward` is the
+    /// A planar surface triangle with shared, smooth outward normals. Culling and sorting
+    /// still use its geometry, rather than the normals used only for lighting.
+    fn smooth_triangle(&mut self, vertices: [V3; 3], normals: [V3; 3], back: bool) -> Result<(), String> {
+        let contours = vec![vertices.to_vec()];
+        let n = newell(&contours);
+        let n = if back { V3(-n.0, -n.1, -n.2) } else { n };
+        let centre = vertices.iter().fold(V3::default(), |s, v| V3(s.0 + v.0 / 3.0, s.1 + v.1 / 3.0, s.2 + v.2 / 3.0));
+        let flip = !self.closed && self.camera.facing(centre, n.unit()) <= 0.0;
+        let before = self.facets.len();
+        self.face(contours, n, Order::Depth)?;
+        if self.facets.len() == before || !self.camera.view.shade {
+            return Ok(());
+        }
+        let values: Vec<_> = normals
+            .into_iter()
+            .map(|n| crate::unclipped_illumination(&self.camera.view, if flip { V3(-n.0, -n.1, -n.2) } else { n }, self.camera.light))
+            .collect();
+        if let Some(face) = self.facets.last_mut() {
+            let points = face.contours.first().map(Vec::as_slice).unwrap_or_default();
+            face.rgb_gradient = crate::RgbGradient::triangle(points, &values);
+        }
+        Ok(())
+    }
+
+    /// The band between two partner rings (same length), as one quad per edge, or for a twisted
+    /// wall with `cuts` (see [`cuts`]) as `cuts[i]` quads along edge `i`. `outward` is the
     /// direction (before rotation) the band faces away from the solid, for orienting normals.
-    fn band(&mut self, a: &[V3], b: &[V3], outward: impl Fn(usize) -> V3) -> Result<(), String> {
+    fn band(&mut self, a: &[V3], b: &[V3], cuts: &[usize], outward: impl Fn(usize) -> V3) -> Result<(), String> {
         let n = a.len().min(b.len());
+        // At 0 and 1, the corners themselves.
+        let lerp = |p: V3, q: V3, s: f64| {
+            if s <= 0.0 {
+                p
+            } else if s >= 1.0 {
+                q
+            } else {
+                V3(p.0 + (q.0 - p.0) * s, p.1 + (q.1 - p.1) * s, p.2 + (q.2 - p.2) * s)
+            }
+        };
+        let order = if cuts.is_empty() { Order::Depth } else { Order::Twisted };
         for i in 0..n {
             let j = (i + 1) % n;
-            let quad = vec![a[i], a[j], b[j], b[i]];
-            let mut normal = quad[1].sub(quad[0]).cross(quad[2].sub(quad[0]));
-            if normal.dot(normal) < 1e-18 {
-                normal = quad[2].sub(quad[0]).cross(quad[3].sub(quad[0]));
+            let pieces = cuts.get(i).copied().unwrap_or(1).max(1);
+            for k in 0..pieces {
+                let (s0, s1) = (k as f64 / pieces as f64, (k + 1) as f64 / pieces as f64);
+                let quad = vec![lerp(a[i], a[j], s0), lerp(a[i], a[j], s1), lerp(b[i], b[j], s1), lerp(b[i], b[j], s0)];
+                // A twist bends the strip between two slices into a saddle: its normal is the whole
+                // quad's average (Newell's), not one corner's triangle, which leans far to one side.
+                let mut normal = newell(std::slice::from_ref(&quad));
+                if normal.dot(normal) < 1e-18 {
+                    continue;
+                }
+                if normal.dot(self.camera.rotate(outward(i))) < 0.0 {
+                    normal = V3(-normal.0, -normal.1, -normal.2);
+                }
+                self.face(vec![quad], normal, order)?;
             }
-            if normal.dot(normal) < 1e-18 {
-                continue;
-            }
-            if normal.dot(self.camera.rotate(outward(i))) < 0.0 {
-                normal = V3(-normal.0, -normal.1, -normal.2);
-            }
-            self.face(vec![quad], normal)?;
         }
         Ok(())
     }
@@ -482,6 +633,38 @@ impl Builder<'_> {
     fn finish(mut self) -> Vec<Facet> {
         self.facets.sort_by(|a, b| a.depth.total_cmp(&b.depth));
         self.facets
+    }
+}
+
+/// How many pieces each edge of a twisted wall is drawn in, from two neighboring slices of the
+/// wall, `a` and `b` (partner rings): as many as make each piece about as long along the edge as
+/// the band between the slices is wide there, 1 to [`MAX_PIECES`]. Twisted walls pass in front of
+/// one another, and a strip the length of its edge has no one depth where another crosses it.
+fn cuts(a: &[V3], b: &[V3]) -> Vec<usize> {
+    let n = a.len().min(b.len());
+    let length = |p: V3, q: V3| q.sub(p).dot(q.sub(p)).sqrt();
+    (0..n)
+        .map(|i| {
+            let j = (i + 1) % n;
+            let (along, across) = (length(a[i], a[j]).max(length(b[i], b[j])), length(a[i], b[i]).max(length(a[j], b[j])));
+            let count = (along / across.max(1e-9)).ceil();
+            if count.is_finite() { (count as usize).clamp(1, MAX_PIECES) } else { MAX_PIECES }
+        })
+        .collect()
+}
+
+/// Lowers the [`cuts`] of every ring's edges (one list per ring) so that `bands` bands of each
+/// make no more than `room` quads in all, or one per edge and band when that is more: the pieces
+/// past each edge's first share the room in proportion.
+fn fit(cuts: &mut [Vec<usize>], bands: usize, room: usize) {
+    let edges = cuts.iter().map(Vec::len).sum::<usize>().saturating_mul(bands);
+    let total = cuts.iter().flatten().sum::<usize>().saturating_mul(bands);
+    let room = room.max(edges);
+    if total > room {
+        let share = (room - edges) as f64 / (total - edges) as f64;
+        for c in cuts.iter_mut().flatten() {
+            *c = 1 + ((c.saturating_sub(1)) as f64 * share).floor() as usize;
+        }
     }
 }
 
@@ -517,15 +700,29 @@ fn outward(ring: &[Point], i: usize, z: f64) -> V3 {
 /// The cross-section of a side: each ring of the shape at depth fraction `t` (0 front, 1 back),
 /// turned by the twist and scaled by the taper about the centre of `bounds`.
 fn section(ring: &[Point], bounds: Rect, o: &Extrude, t: f64) -> Vec<Point> {
-    let c = bounds.center();
-    let (s, cos) = (o.twist * t).to_radians().sin_cos();
-    let k = 1.0 + (o.taper - 1.0) * t;
-    ring.iter()
-        .map(|p| {
-            let (x, y) = ((p.x - c.x) * k, (p.y - c.y) * k);
-            Point::new(c.x + x * cos - y * s, c.y + x * s + y * cos)
-        })
-        .collect()
+    let turn = Turn::new(bounds, o.twist, o.taper, t);
+    ring.iter().map(|p| turn.apply(*p)).collect()
+}
+
+/// The twist and taper at depth fraction `t` (0 front, 1 back): a turn by `twist · t` and a
+/// scale from 1 to `taper`, about the centre of the bounds.
+#[derive(Clone, Copy)]
+struct Turn {
+    centre: Point,
+    sin: f64,
+    cos: f64,
+    scale: f64,
+}
+
+impl Turn {
+    fn new(bounds: Rect, twist: f64, taper: f64, t: f64) -> Self {
+        let (sin, cos) = (twist * t).to_radians().sin_cos();
+        Self { centre: bounds.center(), sin, cos, scale: 1.0 + (taper - 1.0) * t }
+    }
+    fn apply(&self, p: Point) -> Point {
+        let (x, y) = ((p.x - self.centre.x) * self.scale, (p.y - self.centre.y) * self.scale);
+        Point::new(self.centre.x + x * self.cos - y * self.sin, self.centre.y + x * self.sin + y * self.cos)
+    }
 }
 
 /// One step of an extrusion's outline: how far it is inset (negative: outset) and its depth
@@ -572,8 +769,28 @@ fn steps(o: &Extrude) -> Vec<Step> {
         Some(b) if !b.inside => -b.width,
         _ => 0.0,
     };
+    // A twist turns a bevel's steps too: each step between two samples is cut into steps that
+    // turn no further than 6°, as the walls' slices do at most.
+    let refine = |pts: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
+        if o.twist == 0.0 {
+            return pts;
+        }
+        let mut out = Vec::with_capacity(pts.len());
+        for (k, p) in pts.iter().enumerate() {
+            if let Some(q) = k.checked_sub(1).and_then(|k| pts.get(k)) {
+                let turn = (p.1 - q.1).abs() * height / d * o.twist.abs();
+                let n = ((turn / 6.0).ceil() as usize).clamp(1, 64);
+                for m in 1..n {
+                    let s = m as f64 / n as f64;
+                    out.push((q.0 + (p.0 - q.0) * s, q.1 + (p.1 - q.1) * s));
+                }
+            }
+            out.push(*p);
+        }
+        out
+    };
     if let Some(b) = bevel {
-        for (x, y) in profile(&b) {
+        for (x, y) in refine(profile(&b)) {
             let inset = if b.inside { b.width * (1.0 - x) } else { -b.width * x };
             out.push(Step { inset, t: y * height / d, face: 1.0 });
         }
@@ -589,7 +806,7 @@ fn steps(o: &Extrude) -> Vec<Step> {
         out.push(Step { inset: wall, t, face: 0.0 });
     }
     if let Some(b) = bevel.filter(|b| b.both_sides) {
-        for (x, y) in profile(&b).into_iter().rev() {
+        for (x, y) in refine(profile(&b)).into_iter().rev() {
             let inset = if b.inside { b.width * (1.0 - x) } else { -b.width * x };
             out.push(Step { inset, t: 1.0 - y * height / d, face: -1.0 });
         }
@@ -600,21 +817,36 @@ fn steps(o: &Extrude) -> Vec<Step> {
 
 /// Extrude & Bevel: the shape's outline extruded backwards, with optional twist, taper, bevels
 /// and caps.
-pub fn extrude(path: &PathData, bounds: Rect, options: Extrude, view: View) -> Result<Vec<Facet>, String> {
+pub fn extrude(path: &PathData, rule: FillRule, bounds: Rect, options: Extrude, view: View) -> Result<Vec<Facet>, String> {
     check_bounds(bounds)?;
     let o = options.sanitized();
     // No depth: the flat shape, seen from either side.
     if o.depth <= 0.0 {
-        return plane(path, bounds, view);
+        return plane(path, rule, bounds, view);
     }
-    let rings = rings(path, bounds.width().max(bounds.height()), MAX_SOLID_POINTS)?;
+    let rings = rings(path, rule, bounds.width().max(bounds.height()), MAX_SOLID_POINTS)?;
     let camera = Camera::new(view, bounds, o.depth);
     let mut b = Builder { camera: &camera, closed: o.cap, facets: vec![] };
     let steps = steps(&o);
     let z = |t: f64| o.depth / 2.0 - o.depth * t;
     let ring_at =
         |ring: &[Point], s: &Step| -> Vec<V3> { section(&inset(ring, s.inset), bounds, &o, s.t).iter().map(|p| camera.place(*p, z(s.t))).collect() };
-    for ring in &rings {
+    // Every band of a twisted outline, bevels included, is cut as its walls' first slice is (with
+    // bevels and no walls, as its shallowest band is), within the facet limit.
+    let depth_of = |s: &[Step]| s.get(1).zip(s.first()).map_or(0.0, |(b, a)| (b.t - a.t).abs());
+    let wall = steps
+        .windows(2)
+        .find(|s| s[0].face == 0.0 && s[1].face == 0.0)
+        .or_else(|| steps.windows(2).filter(|s| depth_of(s) > 1e-12).min_by(|a, c| depth_of(a).total_cmp(&depth_of(c))));
+    let mut pieces: Vec<Vec<usize>> = rings
+        .iter()
+        .map(|ring| match wall {
+            Some([s0, s1]) if o.twist != 0.0 => cuts(&ring_at(ring, s0), &ring_at(ring, s1)),
+            _ => vec![],
+        })
+        .collect();
+    fit(&mut pieces, steps.len().saturating_sub(1), MAX_FACES);
+    for (ring, pieces) in rings.iter().zip(&pieces) {
         let placed: Vec<Vec<V3>> = steps.iter().map(|s| ring_at(ring, s)).collect();
         for (k, pair) in placed.windows(2).enumerate() {
             let ([a, c], Some(s0), Some(s1)) = (pair, steps.get(k), steps.get(k + 1)) else { continue };
@@ -627,13 +859,15 @@ pub fn extrude(path: &PathData, bounds: Rect, options: Extrude, view: View) -> R
             } else {
                 0.0
             };
-            b.band(a, c, |i| outward(ring, i, face))?;
+            b.band(a, c, pieces, |i| outward(ring, i, face))?;
         }
     }
     if o.cap {
+        // A cap turned toward the viewer covers the walls it overlaps, even those nearer than its
+        // center: twisted walls, and the walls of a fill inside the solid of its stroke.
         for (s, n) in [(steps.first(), 1.0), (steps.last(), -1.0)] {
             let Some(s) = s else { continue };
-            b.face(rings.iter().map(|r| ring_at(r, s)).collect(), camera.rotate(V3(0.0, 0.0, n)))?;
+            b.face(rings.iter().map(|r| ring_at(r, s)).collect(), camera.rotate(V3(0.0, 0.0, n)), Order::Last)?;
         }
     }
     Ok(b.finish())
@@ -641,13 +875,17 @@ pub fn extrude(path: &PathData, bounds: Rect, options: Extrude, view: View) -> R
 
 /// Rotate: the flat art turned in 3D about the centre of `bounds` (which may be larger than the
 /// shape's own, so that every part of one object turns about the same point).
-pub fn plane(path: &PathData, bounds: Rect, view: View) -> Result<Vec<Facet>, String> {
+pub fn plane(path: &PathData, rule: FillRule, bounds: Rect, view: View) -> Result<Vec<Facet>, String> {
     check_bounds(bounds)?;
-    let rings = rings(path, bounds.width().max(bounds.height()), MAX_PLANE_POINTS)?;
+    let rings = rings(path, rule, bounds.width().max(bounds.height()), MAX_PLANE_POINTS)?;
     let camera = Camera::new(view, bounds, 0.0);
     let mut b = Builder { camera: &camera, closed: false, facets: vec![] };
     let contours: Vec<Vec<V3>> = rings.iter().map(|r| r.iter().map(|p| camera.place(*p, 0.0)).collect()).collect();
-    b.face(contours, camera.rotate(V3(0.0, 0.0, 1.0)))?;
+    // A plane is one flat face, seen from either side. Its normal is turned toward the viewer, so
+    // it is drawn last, as a cap is, and planes drawn in one order keep the order they are given in.
+    let up = camera.rotate(V3(0.0, 0.0, 1.0));
+    let n = if camera.facing(V3::default(), up) < 0.0 { V3(-up.0, -up.1, -up.2) } else { up };
+    b.face(contours, n, Order::Last)?;
     Ok(b.finish())
 }
 
@@ -673,6 +911,7 @@ fn edge_distance(rings: &[Vec<Point>], p: Point) -> f64 {
 /// found among the buckets around it rather than among all the edges.
 struct Edges {
     edges: Vec<(Point, Point)>,
+    normals: Vec<(Vec2, Vec2)>,
     origin: Point,
     size: f64,
     n: usize,
@@ -684,6 +923,20 @@ impl Edges {
         const N: usize = 64;
         let edges: Vec<(Point, Point)> =
             rings.iter().flat_map(|r| r.iter().zip(r.iter().cycle().skip(1)).take(r.len()).map(|(a, b)| (*a, *b))).collect();
+        let normals = rings
+            .iter()
+            .flat_map(|r| {
+                let normal = |i: usize| {
+                    let (x, y) = left(r[i], r[(i + 1) % r.len()]);
+                    Vec2::new(x, y)
+                };
+                (0..r.len()).map(move |i| {
+                    let n = normal(i);
+                    let at = |other: Vec2| if n.dot(other) > 0.7 { (n + other).normalize() } else { n };
+                    (at(normal((i + r.len() - 1) % r.len())), at(normal((i + 1) % r.len())))
+                })
+            })
+            .collect();
         let bounds = edges.iter().fold(None, |b: Option<Rect>, (a, c)| Some(b.map_or(Rect::from_points(*a, *c), |b| b.union_pt(*a).union_pt(*c))));
         let bounds = bounds.unwrap_or(Rect::ZERO);
         let size = (bounds.width().max(bounds.height()) / N as f64).max(1e-9);
@@ -698,7 +951,7 @@ impl Edges {
                 }
             }
         }
-        Self { edges, origin: bounds.origin(), size, n: N, buckets }
+        Self { edges, normals, origin: bounds.origin(), size, n: N, buckets }
     }
 
     /// The bucket row or column of coordinate `v`, from the grid's origin `o` on that axis.
@@ -757,15 +1010,22 @@ impl Edges {
     /// The distance from `p` to the nearest edge: the buckets are searched in growing squares
     /// around `p`'s, until no unsearched bucket could hold a nearer edge.
     fn distance(&self, p: Point) -> f64 {
+        self.closest(p).2
+    }
+
+    /// Closest outline point, its inward normal and distance. Curved outline samples share
+    /// corner normals, while a sharp source corner keeps each edge's own direction.
+    fn closest(&self, p: Point) -> (Point, Vec2, f64) {
         let (fx, fy) = ((p.x - self.origin.x) / self.size, (p.y - self.origin.y) / self.size);
         if !fx.is_finite() || !fy.is_finite() {
-            return f64::INFINITY;
+            return (p, Vec2::ZERO, f64::INFINITY);
         }
         let n = self.n as isize;
         let (ci, cj) = ((fx.floor() as isize).clamp(0, n - 1), (fy.floor() as isize).clamp(0, n - 1));
         // How far `p` is outside the grid: the nearest point of the grid to it lies in `p`'s bucket.
         let outside = (fx.clamp(0.0, n as f64) - fx).hypot(fy.clamp(0.0, n as f64) - fy) * self.size;
         let mut best = f64::INFINITY;
+        let mut nearest = (p, Vec2::ZERO);
         for r in 0..n {
             for j in (cj - r)..=(cj + r) {
                 for i in (ci - r)..=(ci + r) {
@@ -774,7 +1034,15 @@ impl Edges {
                     }
                     for k in &self.buckets[(j * n + i) as usize] {
                         if let Some((a, b)) = self.edges.get(*k as usize) {
-                            best = best.min(segment_distance(p, *a, *b));
+                            let d = *b - *a;
+                            let t = if d.hypot2() < 1e-18 { 0.0 } else { ((p - *a).dot(d) / d.hypot2()).clamp(0.0, 1.0) };
+                            let q = Point::new(a.x + d.x * t, a.y + d.y * t);
+                            let distance = p.distance(q);
+                            if distance < best {
+                                best = distance;
+                                let n = self.normals.get(*k as usize).map_or(Vec2::ZERO, |(a, b)| *a * (1.0 - t) + *b * t);
+                                nearest = (q, if n.hypot2() > 0.0 { n.normalize() } else { n });
+                            }
                         }
                     }
                 }
@@ -785,7 +1053,7 @@ impl Edges {
                 break;
             }
         }
-        best
+        (nearest.0, nearest.1, best)
     }
 }
 
@@ -836,8 +1104,8 @@ struct Membrane {
 }
 
 impl Membrane {
-    fn solve(rings: &[Vec<Point>], origin: Point, step: f64, nx: usize, ny: usize) -> Self {
-        let edges = Edges::new(rings);
+    /// `edges` is the index of `rings`' edges (`Edges::new(rings)`).
+    fn solve(rings: &[Vec<Point>], edges: &Edges, origin: Point, step: f64, nx: usize, ny: usize) -> Self {
         let node = |i: usize, j: usize| Point::new(origin.x + i as f64 * step, origin.y + j as f64 * step);
         let idx = |i: usize, j: usize| j * nx + i;
         // A node on the outline itself is held at zero with the outside.
@@ -943,11 +1211,29 @@ impl Membrane {
 
     /// φ at `p`, interpolated between the four nodes around it.
     fn at(&self, p: Point) -> f64 {
+        self.interpolate(p, |i, j| self.phi.get(j * self.nx + i).copied().unwrap_or(0.0))
+    }
+
+    /// Interpolate central node derivatives, rather than differentiating each bilinear cell.
+    /// The latter jumps at every grid line and shows the solver's grid in the lighting.
+    fn gradient(&self, p: Point) -> (f64, f64) {
+        let value = |i, j| self.phi.get(j * self.nx + i).copied().unwrap_or(0.0);
+        let dx = self.interpolate(p, |i, j| {
+            let (a, b) = (i.saturating_sub(1), (i + 1).min(self.nx - 1));
+            (value(b, j) - value(a, j)) / ((b - a).max(1) as f64 * self.step)
+        });
+        let dy = self.interpolate(p, |i, j| {
+            let (a, b) = (j.saturating_sub(1), (j + 1).min(self.ny - 1));
+            (value(i, b) - value(i, a)) / ((b - a).max(1) as f64 * self.step)
+        });
+        (dx, dy)
+    }
+
+    fn interpolate(&self, p: Point, v: impl Fn(usize, usize) -> f64) -> f64 {
         let fx = ((p.x - self.origin.x) / self.step).clamp(0.0, (self.nx - 1) as f64);
         let fy = ((p.y - self.origin.y) / self.step).clamp(0.0, (self.ny - 1) as f64);
         let (i, j) = ((fx.floor() as usize).min(self.nx.saturating_sub(2)), (fy.floor() as usize).min(self.ny.saturating_sub(2)));
         let (tx, ty) = (fx - i as f64, fy - j as f64);
-        let v = |i: usize, j: usize| self.phi.get(j * self.nx + i).copied().unwrap_or(0.0);
         if self.nx < 2 || self.ny < 2 {
             return v(0, 0);
         }
@@ -957,48 +1243,168 @@ impl Membrane {
     }
 }
 
-/// The part of `outline` inside `cell`, as rings (holes running the other way).
-fn material(outline: &PathData, cell: Rect) -> Option<Vec<Vec<Point>>> {
+/// A bounded ear clipping pass on a simple cell contour. Keep its collinear border nodes:
+/// those shared samples can have different heights once lifted onto the membrane. A tiny
+/// cell containing a complete hole, or a complex/degenerate contour, keeps its original fill.
+fn cell_triangles(pieces: &[Vec<Point>]) -> Option<Vec<[Point; 3]>> {
+    let mut triangles = vec![];
+    for ring in pieces {
+        if ring.len() > 128 || signed_area(ring) <= 0.0 {
+            return None;
+        }
+        let mut ring = ring.clone();
+        ring.dedup_by(|a, b| a.distance(*b) < 1e-9);
+        if ring.first().zip(ring.last()).is_some_and(|(a, b)| a.distance(*b) < 1e-9) {
+            ring.pop();
+        }
+        while ring.len() > 3 {
+            let ear = (0..ring.len()).find(|&i| {
+                let n = ring.len();
+                let (a, b, c) = (ring[(i + n - 1) % n], ring[i], ring[(i + 1) % n]);
+                if (b - a).cross(c - a) <= 1e-12 {
+                    return false;
+                }
+                !ring.iter().enumerate().any(|(j, p)| {
+                    j != i
+                        && j != (i + n - 1) % n
+                        && j != (i + 1) % n
+                        && (b - a).cross(*p - a) >= -1e-12
+                        && (c - b).cross(*p - b) >= -1e-12
+                        && (a - c).cross(*p - c) >= -1e-12
+                })
+            })?;
+            let n = ring.len();
+            triangles.push([ring[(ear + n - 1) % n], ring[ear], ring[(ear + 1) % n]]);
+            ring.remove(ear);
+        }
+        if let [a, b, c] = ring.as_slice() {
+            triangles.push([*a, *b, *c]);
+        }
+    }
+    Some(triangles)
+}
+
+/// Most outline segments the booleans of one inflated object's mixed cells take together.
+const MAX_MATERIAL_SEGMENTS: usize = 4_000_000;
+
+/// The part of `outline` (its rings, each with its bounds) inside `cell`, as rings (holes running
+/// the other way). Only the rings whose bounds meet the cell's go into the boolean.
+fn material(outline: &[(Rect, vectorcraft_geom::SubPath)], cell: Rect) -> Option<Vec<Vec<Point>>> {
     let r = PathData::single(vectorcraft_geom::SubPath::polyline(
         &[Point::new(cell.x0, cell.y0), Point::new(cell.x1, cell.y0), Point::new(cell.x1, cell.y1), Point::new(cell.x0, cell.y1)],
         true,
     ));
-    let rule = vectorcraft_geom::FillRule::NonZero;
+    let near = PathData::new(
+        outline.iter().filter(|(b, _)| b.x0 <= cell.x1 && cell.x0 <= b.x1 && b.y0 <= cell.y1 && cell.y0 <= b.y1).map(|(_, s)| s.clone()).collect(),
+    );
+    let rule = FillRule::NonZero;
     let part =
-        vectorcraft_pathops::try_boolean(&r, rule, outline, rule, vectorcraft_pathops::BoolOp::Intersect, vectorcraft_pathops::DEFAULT_PRECISION)
+        vectorcraft_pathops::try_boolean(&r, rule, &near, rule, vectorcraft_pathops::BoolOp::Intersect, vectorcraft_pathops::DEFAULT_PRECISION)
             .ok()?;
-    rings(&part, cell.width(), MAX_PLANE_POINTS).ok()
+    rings(&part, rule, cell.width(), MAX_PLANE_POINTS).ok()
 }
 
-/// Inflate: the shape puffed out like a cushion, its edge kept where the art's outline is.
-pub fn inflate(path: &PathData, bounds: Rect, options: Inflate, view: View) -> Result<Vec<Facet>, String> {
-    check_bounds(bounds)?;
-    let o = options.sanitized();
-    let rings = rings(path, bounds.width().max(bounds.height()), MAX_SOLID_POINTS)?;
+/// A shape to inflate: its rings and the membrane under them on the grid of the bounds.
+struct Puff {
+    rings: Vec<Vec<Point>>,
+    /// The index of the rings' edges.
+    edges: Edges,
+    cell: f64,
+    nx: usize,
+    ny: usize,
+    m: Membrane,
+    /// How high the front rises at its peak.
+    height: f64,
+}
+
+/// The rings of `path` and its membrane on the grid of `bounds`; `None` for a shape with no area.
+fn puff(path: &PathData, rule: FillRule, bounds: Rect, o: &Inflate) -> Result<Option<Puff>, String> {
+    let rings = rings(path, rule, bounds.width().max(bounds.height()), MAX_SOLID_POINTS)?;
     if rings.is_empty() {
-        return Ok(vec![]);
+        return Ok(None);
     }
     let size = bounds.width().max(bounds.height());
     if size <= 0.0 {
-        return Ok(vec![]);
+        return Ok(None);
     }
     const CELLS: usize = 48;
     let cell = size / CELLS as f64;
     let (nx, ny) = (((bounds.width() / cell).ceil() as usize).max(1), ((bounds.height() / cell).ceil() as usize).max(1));
-    let m = Membrane::solve(&rings, bounds.origin(), cell, nx + 1, ny + 1);
     let edges = Edges::new(&rings);
-    let outline = PathData::new(rings.iter().map(|r| vectorcraft_geom::SubPath::polyline(r, true)).collect());
+    let m = Membrane::solve(&rings, &edges, bounds.origin(), cell, nx + 1, ny + 1);
     // A circle of radius r puffs into a half sphere of radius r at 50 % (its membrane peaks at r²/4).
     let height = 2.0 * m.peak.sqrt() * o.volume / 50.0;
+    Ok(Some(Puff { rings, edges, cell, nx, ny, m, height }))
+}
+
+/// Inflate: the shape puffed out like a cushion, its edge kept where the art's outline is.
+pub fn inflate(path: &PathData, rule: FillRule, bounds: Rect, options: Inflate, view: View) -> Result<Vec<Facet>, String> {
+    inflate_together(&[(path, rule)], bounds, options, view).pop().unwrap_or(Ok(vec![]))
+}
+
+/// Inflate for several shapes of one object (a fill and the outlines of its strokes): each puffs
+/// on its own over the grid of `bounds`, and one eye sees them all, as far away as the highest
+/// puff needs with Perspective. One result for each shape, in order.
+pub fn inflate_together(shapes: &[(&PathData, FillRule)], bounds: Rect, options: Inflate, view: View) -> Vec<Result<Vec<Facet>, String>> {
+    let o = options.sanitized();
+    let puffs: Vec<Result<Option<Puff>, String>> =
+        shapes.iter().map(|(path, rule)| check_bounds(bounds).and_then(|()| puff(path, *rule, bounds, &o))).collect();
+    let reach = puffs.iter().flatten().flatten().map(|p| p.height).fold(0.0, f64::max);
+    puffs
+        .into_iter()
+        .map(|p| match p {
+            Ok(Some(p)) => inflated(p, bounds, o, view, reach),
+            Ok(None) => Ok(vec![]),
+            Err(e) => Err(e),
+        })
+        .collect()
+}
+
+/// The facets of one inflated shape, for a camera that allows for a puff `reach` high (or the
+/// shape's own, if higher): `reach` is the highest puff of the shapes drawn together.
+fn inflated(p: Puff, bounds: Rect, o: Inflate, view: View, reach: f64) -> Result<Vec<Facet>, String> {
+    let Puff { rings, edges, cell, nx, ny, m, height } = p;
+    let outline: Vec<(Rect, vectorcraft_geom::SubPath)> = rings
+        .iter()
+        .filter_map(|r| {
+            let b = r.iter().skip(1).fold(Rect::from_points(*r.first()?, *r.first()?), |b, p| b.union_pt(*p));
+            Some((b, vectorcraft_geom::SubPath::polyline(r, true)))
+        })
+        .collect();
+    // When no shape puffs (no volume, or shapes too narrow for the grid), every front (and a back
+    // that puffs too) lies flat in one plane: its cells are drawn last, as caps are. If one shape
+    // puffs, a flat front can be behind its puff, so the cells keep their depths.
+    let flat = reach <= 0.0;
     let lift = |p: Point| {
         if m.peak <= 0.0 || edges.near(p, 1e-9) {
             return 0.0;
         }
         height * (m.at(p).max(0.0) / m.peak).sqrt()
     };
-    let camera = Camera::new(view, bounds, o.depth + 2.0 * height);
-    let mut b = Builder { camera: &camera, closed: true, facets: vec![] };
+    let normal = |p: Point| {
+        let (dx, dy) = m.gradient(p);
+        let (_, inward, distance) = edges.closest(p);
+        let t = (distance / (2.0 * cell)).clamp(0.0, 1.0);
+        let weight = (1.0 - t).powi(2) * (1.0 + 2.0 * t);
+        let gradient = Vec2::new(dx, dy);
+        let slope = gradient.dot(inward).max(0.0);
+        // The zero boundary condition also fixes the tangential derivative at the outline.
+        // Extrapolated outside solver nodes cannot supply it reliably. Blend to that known
+        // direction and its limiting phi near the rim, without showing the grid in highlights.
+        let gradient = gradient * (1.0 - weight) + inward * (slope * weight);
+        let phi = m.at(p).max(0.0) * (1.0 - weight) + slope * distance * weight;
+        // Multiplying the height-function normal by 2√(peak φ) avoids division by
+        // zero at the rim, where the limiting normal is horizontal.
+        let n = V3(-height * gradient.x, -height * gradient.y, 2.0 * (m.peak * phi).sqrt()).unit();
+        if n.dot(n) > 0.5 { n } else { V3(0.0, 0.0, 1.0) }
+    };
+    let smooth = view.shade && view.has_colored_lights();
+    let camera = Camera::new(view, bounds, o.depth + 2.0 * height.max(reach));
+    // Without its back cap the object is a shell open behind, its inside showing.
+    let mut b = Builder { camera: &camera, closed: o.cap, facets: vec![] };
     let half = o.depth / 2.0;
+    // The back: turned and scaled by the twist and taper, its puff too.
+    let back_turn = Turn::new(bounds, o.twist, o.taper, 1.0);
     // The grid's cells, those the surface rises steeply across (near the outline) cut into
     // halves or quarters each way, so the steep rim is drawn in facets as fine as its curve.
     // Every corner sits on one fine lattice (a quarter cell), computed the same way wherever it
@@ -1009,6 +1415,10 @@ pub fn inflate(path: &PathData, bounds: Rect, options: Inflate, view: View) -> R
     let unit = cell / FINE as f64;
     let at = |qx: usize, qy: usize| Point::new(bounds.x0 + qx as f64 * unit, bounds.y0 + qy as f64 * unit);
     let base = |i: usize, j: usize| Rect::from_points(at(i * FINE, j * FINE), at((i + 1) * FINE, (j + 1) * FINE));
+    // Segments the booleans of mixed cells may take in all ([`MAX_MATERIAL_SEGMENTS`]): each one
+    // builds the topology of every outline ring near its cell, so a self-crossing outline cost its
+    // crossings again in every cell it spans. Past it, cells take their clipped pieces.
+    let material_left = std::cell::Cell::new(MAX_MATERIAL_SEGMENTS);
     // The shape's part of a rectangle, as rings.
     let cut = |r: Rect| -> Vec<Vec<Point>> {
         // A cell no edge crosses is wholly inside the shape or wholly outside it.
@@ -1023,7 +1433,18 @@ pub fn inflate(path: &PathData, bounds: Rect, options: Inflate, view: View) -> R
         // Where a hole's piece cancels part of an outline's, that only holds flat: lifted onto
         // the surface the two no longer meet. Such a cell takes the shape's own part of it.
         let mixed = pieces.iter().any(|p| signed_area(p) < 0.0) && pieces.iter().any(|p| signed_area(p) > 0.0);
-        if mixed { material(&outline, r).unwrap_or(pieces) } else { pieces }
+        if !mixed {
+            return pieces;
+        }
+        let near: usize =
+            outline.iter().filter(|(b, _)| b.x0 <= r.x1 && r.x0 <= b.x1 && b.y0 <= r.y1 && r.y0 <= b.y1).map(|(_, sp)| sp.anchors.len()).sum();
+        match material_left.get().checked_sub(near) {
+            Some(left) => {
+                material_left.set(left);
+                material(&outline, r).unwrap_or(pieces)
+            }
+            None => pieces,
+        }
     };
     // How many times each cell is halved each way (0, 1 or 2), from how steeply it rises.
     let levels: Vec<u32> = (0..nx * ny)
@@ -1115,36 +1536,70 @@ pub fn inflate(path: &PathData, bounds: Rect, options: Inflate, view: View) -> R
                             out
                         })
                         .collect();
+                    if height > 0.0
+                        && smooth
+                        && let Some(triangles) = cell_triangles(&pieces)
+                    {
+                        for points in triangles {
+                            let front = points.map(|q| camera.place(q, half + lift(q)));
+                            b.smooth_triangle(front, points.map(|q| camera.rotate(normal(q))), false)?;
+                            if o.both_sides && o.cap {
+                                let back = points.map(|q| camera.place(back_turn.apply(q), -half - lift(q) * back_turn.scale));
+                                let normals = points.map(|q| {
+                                    let n = normal(q);
+                                    // A uniform taper scales all three coordinates equally;
+                                    // twist turns the back normal about the shape's z-axis.
+                                    camera.rotate(V3(back_turn.cos * n.0 - back_turn.sin * n.1, back_turn.sin * n.0 + back_turn.cos * n.1, -n.2))
+                                });
+                                b.smooth_triangle(back, normals, true)?;
+                            }
+                        }
+                        continue;
+                    }
                     let lifts: Vec<Vec<f64>> = pieces.iter().map(|p| p.iter().map(|q| lift(*q)).collect()).collect();
                     // Each piece lifted onto the surface. Its normal is the lifted piece's own average
                     // (Newell's), not the slope at one point: near the edge the surface turns
                     // vertical, and a point sample there misjudges which way a whole piece faces.
-                    let lifted = |sign: f64| -> Vec<Vec<V3>> {
-                        pieces.iter().zip(&lifts).map(|(p, h)| p.iter().zip(h).map(|(q, h)| camera.place(*q, sign * (half + h))).collect()).collect()
-                    };
-                    let front = lifted(1.0);
+                    let front: Vec<Vec<V3>> =
+                        pieces.iter().zip(&lifts).map(|(p, h)| p.iter().zip(h).map(|(q, h)| camera.place(*q, half + h)).collect()).collect();
                     let n = newell(&front);
-                    b.face(front, n)?;
-                    if o.both_sides {
+                    let order = if flat { Order::Last } else { Order::Depth };
+                    b.face(front, n, order)?;
+                    if o.both_sides && o.cap {
                         // The back winds the same way round as the front, so its outward normal is
                         // reversed.
-                        let back = lifted(-1.0);
+                        let back: Vec<Vec<V3>> = pieces
+                            .iter()
+                            .zip(&lifts)
+                            .map(|(p, h)| p.iter().zip(h).map(|(q, h)| camera.place(back_turn.apply(*q), -half - h * back_turn.scale)).collect())
+                            .collect();
                         let n = newell(&back);
-                        b.face(back, V3(-n.0, -n.1, -n.2))?;
+                        b.face(back, V3(-n.0, -n.1, -n.2), order)?;
                     }
                 }
             }
         }
     }
-    if !o.both_sides {
-        let back: Vec<Vec<V3>> = rings.iter().map(|r| r.iter().map(|p| camera.place(*p, -half)).collect()).collect();
-        b.face(back, camera.rotate(V3(0.0, 0.0, -1.0)))?;
+    if !o.both_sides && o.cap {
+        let back: Vec<Vec<V3>> = rings.iter().map(|r| r.iter().map(|p| camera.place(back_turn.apply(*p), -half)).collect()).collect();
+        // The back turned toward the viewer covers the walls it overlaps, even those nearer than
+        // its center: twisted walls, and the walls of a fill inside the solid of its stroke.
+        b.face(back, camera.rotate(V3(0.0, 0.0, -1.0)), Order::Last)?;
     }
     if o.depth > 0.0 {
-        for ring in &rings {
-            let front: Vec<V3> = ring.iter().map(|p| camera.place(*p, half)).collect();
-            let back: Vec<V3> = ring.iter().map(|p| camera.place(*p, -half)).collect();
-            b.band(&front, &back, |i| outward(ring, i, 0.0))?;
+        // The sides, cut into slices that follow a twist or taper.
+        let slices = if o.twist != 0.0 || o.taper != 1.0 { ((o.twist.abs() / 6.0).ceil() as usize).clamp(8, 64) } else { 1 };
+        let at = |ring: &[Point], k: usize| -> Vec<V3> {
+            let t = k as f64 / slices as f64;
+            let turn = Turn::new(bounds, o.twist, o.taper, t);
+            ring.iter().map(|p| camera.place(turn.apply(*p), half - o.depth * t)).collect()
+        };
+        let mut pieces: Vec<Vec<usize>> = rings.iter().map(|r| if o.twist != 0.0 { cuts(&at(r, 0), &at(r, 1)) } else { vec![] }).collect();
+        fit(&mut pieces, slices, MAX_FACES.saturating_sub(b.facets.len()));
+        for (ring, pieces) in rings.iter().zip(&pieces) {
+            for k in 0..slices {
+                b.band(&at(ring, k), &at(ring, k + 1), pieces, |i| outward(ring, i, 0.0))?;
+            }
         }
     }
     Ok(b.finish())
@@ -1153,3 +1608,7 @@ pub fn inflate(path: &PathData, bounds: Rect, options: Inflate, view: View) -> R
 #[cfg(test)]
 #[path = "tests_solid.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests_inflate_shading.rs"]
+mod tests_inflate_shading;

@@ -78,6 +78,58 @@ fn the_mask(d: &Document) -> (Node, OpacityMask) {
     (n, m)
 }
 
+/// The two pixels of the image a soft mask of kind `s` draws: black, opaque on the left and clear
+/// on the right (its own `/SMask`).
+fn mask_image_pixels(s: &str) -> [[u8; 4]; 2] {
+    let g = first_extra(1);
+    let group = stream(
+        &format!(
+            "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /XObject << /Im0 {} 0 R >> >>",
+            g + 1
+        ),
+        "q 100 0 0 100 0 0 cm /Im0 Do Q",
+    );
+    let image = stream(
+        &format!(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /SMask {} 0 R",
+            g + 2
+        ),
+        "000000000000>",
+    );
+    let smask =
+        stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode", "FF00>");
+    let bytes = one_page(
+        "/GS0 gs 1 0 0 rg 0 0 100 100 re f",
+        &format!("/ExtGState << /GS0 << /SMask << /Type /Mask /S /{s} /G {g} 0 R >> >> >>"),
+        &[&group, &image, &smask],
+    );
+    let d = open(&bytes);
+    let (_, m) = the_mask(&d);
+    let mut keys = vec![];
+    m.art.walk(&mut |n| {
+        if let NodeKind::Image(im) = &n.kind {
+            keys.push(im.key.clone());
+        }
+    });
+    let [key] = keys.as_slice() else { panic!("one image in the mask art: {keys:?}") };
+    let px = image::load_from_memory(&d.images[key].bytes).unwrap().to_rgba8();
+    [px.get_pixel(0, 0).0, px.get_pixel(1, 0).0]
+}
+
+/// An alpha soft mask whose art is an image with its own alpha (some PDF writers rasterize masks
+/// so): the image is read white with that alpha, so the mask's luminance is the alpha, not the
+/// image's colour (ISO 32000-1 11.5.2: an alpha mask takes the group's alpha, not its colour).
+#[test]
+fn an_alpha_soft_mask_of_an_image_uses_the_images_alpha() {
+    assert_eq!(mask_image_pixels("Alpha"), [[255, 255, 255, 255], [255, 255, 255, 0]]);
+}
+
+/// A luminosity soft mask takes the group's colour (ISO 32000-1 11.5.3): its image stays black.
+#[test]
+fn a_luminosity_soft_mask_of_an_image_keeps_the_images_colour() {
+    assert_eq!(mask_image_pixels("Luminosity"), [[0, 0, 0, 255], [0, 0, 0, 0]]);
+}
+
 #[test]
 fn a_luminosity_soft_mask_becomes_an_opacity_mask() {
     let d = open(&masked("/S /Luminosity", "1 1 1 rg 0 0 50 100 re f"));
@@ -258,6 +310,56 @@ fn text_becomes_point_type() {
 }
 
 #[test]
+fn character_spacing_does_not_become_spaces() {
+    for size in [12.0, 13.0, 14.0, 15.0] {
+        for tracking in [150.0, 180.0, 200.0, 220.0, 250.0] {
+            let spacing = size * tracking / 1000.0;
+            let content = format!("BT /F1 {size} Tf {spacing} Tc 10 40 Td (OPEN DAILY) Tj ET");
+            let t = texts(&open(&one_page(&content, HELVETICA, &[])));
+            assert_eq!(t.len(), 1, "size {size}, tracking {tracking}: {t:?}");
+            assert_eq!(t[0].plain_text(), "OPEN DAILY", "size {size}, tracking {tracking}");
+        }
+    }
+}
+
+/// Invisible text (rendering mode 3: a scanned page's recognized text, laid over the scan) is
+/// type with neither fill nor stroke, and the visible text keeps its paint. On a line with
+/// stroked text it is a run of its own, not stroked. As outlines it would draw nothing: it is left
+/// out, and the open says so (#2675).
+#[test]
+fn invisible_text_becomes_type_without_paint() {
+    let bytes = one_page(
+        "0.5 g 10 40 80 40 re f \
+         BT /F1 10 Tf 3 Tr 12 70 Td (Invisible one) Tj 0 -12 Td (Invisible two) Tj ET \
+         BT /F1 10 Tf 0 g 0 Tr 12 20 Td (Visible) Tj ET \
+         BT /F1 10 Tf 1 0 0 RG 1 Tr 12 90 Td (Out) Tj 3 Tr (line) Tj ET",
+        HELVETICA,
+        &[],
+    );
+    let r = open_with(&bytes, |_| {});
+    let t = texts(&r.document);
+    let text = |o: &vectorcraft_doc::TextObject| o.runs.iter().map(|r| r.text.as_str()).collect::<String>();
+    assert_eq!(t.iter().map(text).collect::<Vec<_>>(), ["Invisible one", "Invisible two", "Visible", "Outline"], "{t:?}");
+    let unpainted = |st: &vectorcraft_doc::CharStyle| st.fill.is_none() && !st.has_stroke();
+    for o in &t[..2] {
+        assert!(o.runs.iter().all(|r| unpainted(&r.style)), "{:?}", o.runs);
+    }
+    assert!(t[2].runs.iter().all(|r| !r.style.fill.is_none()), "{:?}", t[2].runs);
+    let runs: Vec<(&str, bool)> = t[3].runs.iter().map(|r| (r.text.as_str(), unpainted(&r.style))).collect();
+    assert_eq!(runs, [("Out", false), ("line", true)]);
+    assert!(t[3].runs[0].style.has_stroke());
+    assert!(!r.warnings.iter().any(|w| w == INVISIBLE_TEXT_NOTE), "{:?}", r.warnings);
+    // As outlines: only the visible text's.
+    let r = open_with(&bytes, |o| o.text_as = TextAs::Outlines);
+    assert!(texts(&r.document).is_empty());
+    assert!(r.warnings.iter().any(|w| w == INVISIBLE_TEXT_NOTE), "{:?}", r.warnings);
+    let outlines: Vec<Rect> =
+        all(&r.document).iter().filter(|n| n.name.as_deref() == Some("<Text Outlines>")).filter_map(|n| n.geometric_bounds()).collect();
+    // y down: "Visible" sits on 80, "Out" on 10; the invisible lines on 30 and 42 left nothing.
+    assert!(!outlines.is_empty() && outlines.iter().all(|b| b.y1 < 20.0 || b.y0 > 70.0), "{outlines:?}");
+}
+
+#[test]
 fn font_names_resolve_to_available_families() {
     let f = crate::import_text::Families::available();
     let (family, style, found) = f.resolve("ABCDEF+SourceSans3-Bold", None, false);
@@ -267,6 +369,24 @@ fn font_names_resolve_to_available_families() {
     let _ = found;
     let (family, style, found) = f.resolve("MissingSansPro", Some(700), true);
     assert_eq!((family.as_str(), style.as_str(), found), ("Missing Sans Pro", "Bold Italic", false));
+}
+
+/// A value of the page's font dictionary that the reader can't parse (a name with a broken `#`
+/// escape, a number with a stray `-`) is left out when the page's fonts are noted, and the fonts
+/// after it are noted.
+#[test]
+fn fonts_are_noted_past_font_resources_the_reader_cannot_parse() {
+    for junk in ["/#zz", "12-.5"] {
+        let resources = format!("/Font << /A {junk} /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>");
+        let bytes = one_page("BT /F1 24 Tf 10 30 Td (Hello) Tj ET", &resources, &[]);
+        // Opened by the reader alone, without the checks of `pages::open`.
+        let pdf = craft_pdf::syntax::Pdf::new(bytes).unwrap();
+        let mut fonts = crate::import_scan::FontNames::new();
+        let mut ocgs = crate::import_scan::Ocgs::read(&pdf);
+        crate::import_scan::scan_page(&pdf.pages()[0], &mut ocgs, false, &mut fonts, pdf.decode_limits().max_decoded_stream()).unwrap();
+        let noted: Vec<_> = fonts.into_values().map(|f| (f.name, f.embedded)).collect();
+        assert_eq!(noted, [("Helvetica".to_string(), false)], "{junk}");
+    }
 }
 
 // ---------- meshes, stops and extend ----------
@@ -312,7 +432,7 @@ fn gradient_stop_opacity_round_trips() {
     let mut d = Document::new(100.0, 100.0);
     let mut stops = vec![GradientStop::new(0.0, Color::rgb(1.0, 0.0, 0.0)), GradientStop::new(1.0, Color::rgb(0.0, 0.0, 1.0))];
     stops[1].opacity = 0.2;
-    let g = GradientPaint::new(Gradient { kind: GradientKind::Linear, stops });
+    let g = GradientPaint::new(Gradient::new(GradientKind::Linear, stops));
     let n = Node::path(
         NodeId(0),
         shapes::rectangle(Rect::new(10.0, 10.0, 90.0, 90.0)),
@@ -351,6 +471,180 @@ fn a_shading_that_does_not_extend_paints_only_between_its_ends() {
     let d = open(&one_page("/Sh0 sh", &shading("true false"), &[]));
     let b = all(&d).into_iter().find(|n| matches!(n.kind, NodeKind::Group { clip: true, .. })).unwrap().geometric_bounds().unwrap();
     assert!(b.x0 <= 0.0 && (b.x1 - 80.0).abs() < 0.01, "{b:?}");
+}
+
+/// GUARDS: an exponential function with N off 1 (how a gradient midpoint is written) keeps its
+/// curve: sampled stops must follow it, not collapse to the two ends because neighbouring samples
+/// look straight.
+#[test]
+fn a_shading_with_an_exponent_keeps_its_curve() {
+    let shading = "/Shading << /Sh0 << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Extend [true true] /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1.4234 >> >> >>";
+    let d = open(&one_page("/Sh0 sh", shading, &[]));
+    let g = all(&d)
+        .into_iter()
+        .find_map(|n| n.appearance.items.iter().find_map(|i| if let Paint::Gradient(g) = i.paint() { Some(g.clone()) } else { None }))
+        .expect("a gradient");
+    assert!(g.gradient.stops.len() > 2, "{:?}", g.gradient.stops);
+    // Halfway along, the curve is at 0.5^1.4234 ≈ 0.373, well off the straight 0.5.
+    let (c, _) = g.gradient.sample(0.5);
+    let v = c.to_rgb()[0];
+    assert!((v - 0.5f32.powf(1.4234)).abs() < 0.01, "{v}");
+}
+
+/// A 100 × 100 square filled with a function-based shading (type 1) over `domain`, placed by
+/// `matrix`, whose PostScript calculator function is `program` (x y → r g b).
+fn function_shading(domain: &str, matrix: &str, program: &str) -> ImportReport {
+    let f = first_extra(1);
+    let resources = format!(
+        "/Pattern << /P0 << /PatternType 2 /Shading << /ShadingType 1 /ColorSpace /DeviceRGB /Domain [{domain}] /Matrix [{matrix}] /Function {f} 0 R >> >> >>"
+    );
+    let function = stream(&format!("/FunctionType 4 /Domain [{domain}] /Range [0 1 0 1 0 1]"), program);
+    open_with(&one_page("/Pattern cs /P0 scn 0 0 100 100 re f", &resources, &[&function]), |_| {})
+}
+
+/// A browser writes a repeating linear gradient as a function-based shading whose colour changes
+/// along one axis only: it comes in as a linear gradient with hard stops, red and white as in the
+/// file, not as a flat grey (#3621).
+#[test]
+fn a_function_based_shading_along_one_axis_becomes_a_linear_gradient() {
+    let _held = shadings();
+    // Four stripes of red, then white, across the square (x 0..4 over 100 pt).
+    let r = function_shading("0 4 0 1", "25 0 0 100 0 0", "{ pop dup truncate sub 0.5 le { 1 0 0 } { 1 1 1 } ifelse }");
+    assert!(!r.warnings.iter().any(|w| w.contains("flat")), "{:?}", r.warnings);
+    let g = all(&r.document)
+        .into_iter()
+        .find_map(|n| match n.appearance.fill().map(|f| &f.paint) {
+            Some(Paint::Gradient(g)) => Some(g.clone()),
+            _ => None,
+        })
+        .expect("a gradient fill");
+    assert_eq!(g.gradient.kind, GradientKind::Linear);
+    let (red, white) = ([1.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    assert!(g.gradient.stops.iter().all(|s| s.color.to_rgb() == red || s.color.to_rgb() == white), "{:?}", g.gradient.stops);
+    let geom = g.geom.as_ref().unwrap();
+    assert!((geom.start.x - 0.0).abs() < 0.01 && (geom.end.x - 100.0).abs() < 0.01, "across the square: {geom:?}");
+    for (t, want) in [(0.06, red), (0.19, white), (0.31, red), (0.44, white), (0.56, red), (0.94, white)] {
+        assert_eq!(g.gradient.sample(t).0.to_rgb(), want, "at {t}");
+    }
+    // The colour changes where the file's does (x = 0.5, 1 … 3.5, and at x = 4 itself, red
+    // again): hard stops, not ramps.
+    let edges: Vec<f32> =
+        g.gradient.stops.windows(2).filter(|w| (w[0].offset - w[1].offset).abs() < 1e-4 && w[0].color != w[1].color).map(|w| w[0].offset).collect();
+    assert_eq!(edges.len(), 8, "{:?}", g.gradient.stops);
+    for (k, e) in edges.iter().take(7).enumerate() {
+        assert!((e - (k + 1) as f32 / 8.0).abs() < 1e-4, "change {k} at {e}");
+    }
+}
+
+/// A function-based shading paints only over its domain: a square filled with one whose domain
+/// covers its left half is clipped to that half; one whose domain covers it all isn't clipped.
+#[test]
+fn a_function_based_shading_paints_only_over_its_domain() {
+    let _held = shadings();
+    let clips = |matrix: &str| -> Vec<Node> {
+        let r = function_shading("0 1 0 1", matrix, "{ pop 0 0 }");
+        all(&r.document).into_iter().filter(|n| matches!(n.kind, NodeKind::Group { clip: true, .. })).collect()
+    };
+    let half = clips("50 0 0 100 0 0");
+    let [c] = half.as_slice() else { panic!("one clip group: {half:?}") };
+    let b = c.geometric_bounds().unwrap();
+    assert!(b.x0.abs() < 0.01 && (b.x1 - 50.0).abs() < 0.01 && b.y0.abs() < 0.01 && (b.y1 - 100.0).abs() < 0.01, "{b:?}");
+    assert!(clips("100 0 0 100 0 0").is_empty());
+}
+
+/// Held by tests that import function-based shadings, so the evaluations one of them counts are
+/// its own.
+pub(crate) static SHADINGS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn shadings() -> std::sync::MutexGuard<'static, ()> {
+    SHADINGS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The function evaluations function-based shadings take while `f` imports (hold [`shadings`]).
+fn evaluations(f: impl FnOnce() -> ImportReport) -> (ImportReport, usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    crate::import_shading::EVALUATIONS.store(0, Relaxed);
+    let r = f();
+    (r, crate::import_shading::EVALUATIONS.load(Relaxed))
+}
+
+/// Stripes across the square: red, then white, `n` times (x 0..n over 100 pt).
+const STRIPES: &str = "{ pop dup truncate sub 0.5 le { 1 0 0 } { 1 1 1 } ifelse }";
+
+/// A shading used by many paths is read once (#3621 review): a file can't make the import
+/// evaluate its function once per path.
+#[test]
+fn a_function_based_shading_filling_many_paths_is_read_once() {
+    let _held = shadings();
+    let f = first_extra(1);
+    let resources = format!(
+        "/Pattern << /P0 << /PatternType 2 /Shading << /ShadingType 1 /ColorSpace /DeviceRGB /Domain [0 4 0 1] /Matrix [25 0 0 100 0 0] /Function {f} 0 R >> >> >>"
+    );
+    let function = stream("/FunctionType 4 /Domain [0 4 0 1] /Range [0 1 0 1 0 1]", STRIPES);
+    let content: String = (0..2000).map(|i| format!("{} {} 2 2 re f ", i % 50 * 2, i / 50 * 2)).collect();
+    let once = evaluations(|| function_shading("0 4 0 1", "25 0 0 100 0 0", STRIPES)).1;
+    let (r, many) = evaluations(|| open_with(&one_page(&format!("/Pattern cs /P0 scn {content}"), &resources, &[&function]), |_| {}));
+    assert!(once > 0 && many <= once, "one path {once}, 2000 paths {many}");
+    assert!(all(&r.document).iter().any(|n| matches!(n.appearance.fill().map(|f| &f.paint), Some(Paint::Gradient(_)))));
+}
+
+/// Shadings that each take many evaluations share one budget per import: past it they come in as
+/// their average colour, then grey, with a warning, and the import stays bounded.
+#[test]
+fn function_based_shadings_share_one_budget_per_import() {
+    let _held = shadings();
+    // 40 shadings, each other stripes (fine ones: each takes thousands of evaluations).
+    let n = 40;
+    let patterns: String = (0..n)
+        .map(|i| {
+            format!(
+                "/P{i} << /PatternType 2 /Shading << /ShadingType 1 /ColorSpace /DeviceRGB /Domain [0 {w} 0 1] /Matrix [{s} 0 0 100 0 0] /Function {} 0 R >> >> ",
+                first_extra(1) + i,
+                w = 100 + i,
+                s = 100.0 / (100 + i) as f64
+            )
+        })
+        .collect();
+    let functions: Vec<String> =
+        (0..n).map(|i| stream(&format!("/FunctionType 4 /Domain [0 {} 0 1] /Range [0 1 0 1 0 1]", 100 + i), STRIPES)).collect();
+    let content: String = (0..n).map(|i| format!("/Pattern cs /P{i} scn 0 {i} 100 1 re f ")).collect();
+    let extra: Vec<&str> = functions.iter().map(String::as_str).collect();
+    let (r, used) = evaluations(|| open_with(&one_page(&content, &format!("/Pattern << {patterns}>>"), &extra), |_| {}));
+    assert!(used <= crate::import_shading::MAX_FUNCTION_EVALUATIONS, "{used}");
+    let gradients = all(&r.document).iter().filter(|n| matches!(n.appearance.fill().map(|f| &f.paint), Some(Paint::Gradient(_)))).count();
+    assert!(gradients > 0 && gradients < n, "{gradients} of {n} read as gradients");
+    assert!(r.warnings.iter().any(|w| w.contains("too many to read")), "{:?}", r.warnings);
+}
+
+/// A colour that changes in step with the sampling grid along y only (one colour at every grid
+/// point) is still read along y, not as a flat gradient along x.
+#[test]
+fn a_function_based_shading_in_step_with_the_grid_is_read_along_its_axis() {
+    let _held = shadings();
+    // Red in bands a quarter of a period wide around every grid row (17·y − 0.37 a whole number).
+    let r = function_shading("0 1 0 1", "100 0 0 100 0 0", "{ exch pop 17 mul 0.37 sub 0.125 add dup floor sub 0.25 lt { 1 0 0 } { 1 1 1 } ifelse }");
+    let g = all(&r.document)
+        .into_iter()
+        .find_map(|n| match n.appearance.fill().map(|f| &f.paint) {
+            Some(Paint::Gradient(g)) => Some(g.clone()),
+            _ => None,
+        })
+        .expect("a gradient fill");
+    let geom = g.geom.as_ref().unwrap();
+    assert!((geom.start.x - geom.end.x).abs() < 0.01 && (geom.start.y - geom.end.y).abs() > 99.0, "along y: {geom:?}");
+    assert!(g.gradient.stops.iter().any(|s| s.color.to_rgb() == [1.0, 1.0, 1.0]), "{:?}", g.gradient.stops);
+}
+
+/// A function-based shading whose colour changes along both axes has no gradient: it comes in as
+/// the colour it averages to, never as a grey that isn't in it.
+#[test]
+fn a_function_based_shading_along_both_axes_becomes_its_average_colour() {
+    let _held = shadings();
+    // r = g = x·y, b = 0 over the unit square: averages to (0.25, 0.25, 0).
+    let r = function_shading("0 1 0 1", "100 0 0 100 0 0", "{ mul dup 0 }");
+    let c = all(&r.document).iter().find_map(fill_color).expect("a flat fill").to_rgb();
+    assert!((c[0] - 0.25).abs() < 0.03 && (c[1] - 0.25).abs() < 0.03 && c[2].abs() < 1e-6, "{c:?}");
+    assert!(r.warnings.iter().any(|w| w.contains("average")), "{:?}", r.warnings);
 }
 
 /// A diamond (10–90 × 10–90) clipping `paint`, which fills its bounds: how a shape filled with a
@@ -543,4 +837,30 @@ fn glyphs_closed_up_by_half_an_em_stay_one_line() {
     let t = texts(&open(&one_page("BT /F1 20 Tf 10 40 Td [(T) 400 (i) 450 (g) 0 (h) 0 (t)] TJ ET", HELVETICA, &[])));
     assert_eq!(t.len(), 1, "one line: {:?}", t.iter().map(|t| t.plain_text()).collect::<Vec<_>>());
     assert_eq!(t[0].plain_text(), "Tight");
+}
+
+/// #1542: a clip only counts as covering the page when it does; a diamond whose bounding box is
+/// the page still clips, a page rectangle or a turned square around it doesn't make a group.
+#[test]
+fn clips_with_the_page_as_bounding_box_still_clip() {
+    let clipped = |clip: &str| {
+        let d = open(&one_page(&format!("q {clip} W n 1 0.5 0 rg 0 0 100 100 re f Q"), "", &[]));
+        all(&d).iter().any(|n| matches!(n.kind, NodeKind::Group { clip: true, .. }))
+    };
+    assert!(clipped("50 0 m 100 50 l 50 100 l 0 50 l h"), "diamond");
+    assert!(!clipped("0 0 100 100 re"), "the page");
+    assert!(!clipped("50 -60 m 160 50 l 50 160 l -60 50 l h"), "a turned square around the page");
+}
+
+/// Issue #2674: `0 w` is the thinnest line the device can draw (ISO 32000-1, 8.4.3.2), not no
+/// line: it imports as a visible hairline and survives a PDF round trip.
+#[test]
+fn zero_width_lines_import_as_hairlines() {
+    let d = open(&one_page("0 0 0 RG 0 w 10 50 m 90 50 l S 0.9 g 0 w 20 60 30 20 re b 1 w 10 20 m 90 20 l S", "", &[]));
+    let widths = |d: &Document| -> Vec<f64> { all(d).iter().filter_map(|n| n.appearance.stroke().map(|s| s.width)).collect() };
+    let w = widths(&d);
+    assert_eq!(w.len(), 3, "{w:?}");
+    assert!(w.iter().all(|w| *w > 0.0 && *w <= 1.0), "zero width strokes become hairlines: {w:?}");
+    let back = widths(&roundtrip(&d));
+    assert_eq!(back.len(), 3, "hairlines survive the PDF round trip: {back:?}");
 }
