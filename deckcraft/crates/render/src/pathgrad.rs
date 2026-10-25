@@ -18,6 +18,13 @@ use vello_cpu::{Pixmap, RenderContext, peniko};
 /// Longest side of the rasterised gradient, in pixels (bilinear sampling smooths the rest).
 const MAX_SIDE: f64 = 384.0;
 
+/// Most pixel × outline-edge tests one `shape` gradient may cost; a denser outline is simplified
+/// to fit (each pixel tests every edge).
+const MAX_EDGE_WORK: u64 = 64_000_000;
+
+/// Fewest edges a simplified polygon keeps, so a coarse outline still has a shape.
+const MIN_POLY_EDGES: usize = 8;
+
 /// Colour position (0 at the focus, 1 at the edge) of `p` for path `kind` in `bounds` with the
 /// focus rect `focus` (fractions inset from left, top, right, bottom), `outline` being the
 /// shape's flattened polygon(s) for `shape`.
@@ -30,7 +37,32 @@ pub fn position(kind: &str, bounds: Rect, focus: [f64; 4], outline: &[Vec<Point>
     );
     let f = if f.x0 <= f.x1 && f.y0 <= f.y1 { f } else { Rect::from_center_size(f.center(), (0.0, 0.0)) };
     match kind {
-        "shape" if !outline.is_empty() => shape_position(outline, f.center(), p),
+        "shape" if !outline.is_empty() => {
+            // A focus rectangle (not a point) is the first colour throughout, as PowerPoint draws
+            // it; outside, the colour runs from the rectangle's edge to the outline along the ray
+            // from its centre.
+            if f.width() > 1e-9 && f.height() > 1e-9 {
+                if f.contains(p) {
+                    return 0.0;
+                }
+                let c = f.center();
+                let to_outline = shape_position(outline, c, p);
+                let d = (p - c).hypot();
+                if to_outline <= 0.0 || d <= 0.0 {
+                    return 1.0;
+                }
+                // Where the ray leaves the focus rectangle, as a share of the way to `p`.
+                let v = p - c;
+                let kx = if v.x.abs() > 1e-12 { (f.width() / 2.0) / v.x.abs() } else { f64::INFINITY };
+                let ky = if v.y.abs() > 1e-12 { (f.height() / 2.0) / v.y.abs() } else { f64::INFINITY };
+                let rect_share = kx.min(ky).min(1.0);
+                // p is `to_outline` of the way to the outline; the rectangle edge `rect_share` of
+                // the way to p.
+                let outline_share = 1.0 / to_outline; // outline distance in units of |p - c|
+                return ((1.0 - rect_share) / (outline_share - rect_share).max(1e-9)).clamp(0.0, 1.0);
+            }
+            shape_position(outline, f.center(), p)
+        }
         _ => {
             // Distance outside the focus rect along each axis, over the room to that side's edge.
             let axis = |v: f64, lo: f64, hi: f64, edge_lo: f64, edge_hi: f64| {
@@ -55,7 +87,9 @@ fn shape_position(outline: &[Vec<Point>], c: Point, p: Point) -> f64 {
     if len < 1e-9 {
         return 0.0;
     }
-    // Nearest crossing of the ray c + s·d (s > 0) with an edge.
+    // The outline scaled about `c` by t reaches `p` first (smallest t) where the ray's farthest
+    // crossing does: the only crossing for a focus inside a convex outline, and the one that
+    // still works for a focus off the shape (a corner of an ellipse's box).
     let mut best = f64::INFINITY;
     for poly in outline {
         for w in poly.windows(2) {
@@ -69,7 +103,7 @@ fn shape_position(outline: &[Vec<Point>], c: Point, p: Point) -> f64 {
             let s = ac.cross(e) / den;
             let u = ac.cross(d) / den;
             if s > 1e-9 && (-1e-9..=1.0 + 1e-9).contains(&u) {
-                best = best.min(s);
+                best = if best.is_finite() { best.max(s) } else { s };
             }
         }
     }
@@ -109,6 +143,65 @@ pub fn polygons(path: &BezPath) -> Vec<Vec<Point>> {
     out
 }
 
+/// `outline` cut down to at most about `max_edges` edges in total: first by dropping points
+/// closer than `tol` to the last kept one (detail finer than a raster pixel), then, if still too
+/// many, by keeping every k-th point. Each polygon stays closed. Returns it unchanged when it fits.
+fn simplify(outline: Vec<Vec<Point>>, tol: f64, max_edges: usize) -> Vec<Vec<Point>> {
+    let edges = |o: &[Vec<Point>]| o.iter().map(|p| p.len().saturating_sub(1)).sum::<usize>();
+    if edges(&outline) <= max_edges {
+        return outline;
+    }
+    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.0 };
+    let mut out: Vec<Vec<Point>> = outline
+        .into_iter()
+        .map(|poly| {
+            let mut kept: Vec<Point> = Vec::with_capacity(poly.len());
+            let last = poly.last().copied();
+            for p in poly {
+                if kept.last().is_none_or(|q| (p - *q).hypot() >= tol) {
+                    kept.push(p);
+                }
+            }
+            if let (Some(l), Some(k)) = (last, kept.last().copied())
+                && k != l
+            {
+                kept.push(l);
+            }
+            kept
+        })
+        .filter(|p| p.len() > 2)
+        .collect();
+    let total = edges(&out);
+    if total > max_edges {
+        let k = total.div_ceil(max_edges.max(1)).max(2);
+        for poly in &mut out {
+            let n = poly.len();
+            if n <= MIN_POLY_EDGES + 1 {
+                continue;
+            }
+            let k = k.min((n - 1) / MIN_POLY_EDGES).max(1);
+            let last = poly.last().copied();
+            let mut kept: Vec<Point> = poly.iter().step_by(k).copied().collect();
+            if let (Some(l), Some(q)) = (last, kept.last().copied())
+                && q != l
+            {
+                kept.push(l);
+            }
+            *poly = kept;
+        }
+        // Polygons too small to thin stay whole; drop the smallest ones if they alone overflow.
+        if edges(&out) > max_edges {
+            out.sort_by_key(|p| std::cmp::Reverse(p.len()));
+            let mut sum = 0usize;
+            out.retain(|p| {
+                sum = sum.saturating_add(p.len().saturating_sub(1));
+                sum <= max_edges
+            });
+        }
+    }
+    out
+}
+
 /// A 256-entry colour ramp for the sorted, already expanded `stops` (linear in sRGB between them).
 pub fn ramp(stops: &[(f64, Rgba)]) -> Vec<Rgba> {
     (0..256)
@@ -139,7 +232,14 @@ pub fn fill(ctx: &mut RenderContext, kind: &str, focus: [f64; 4], stops: &[(f64,
     let longest = bounds.width().max(bounds.height()) * k;
     let s = (MAX_SIDE / longest).min(1.0) * k;
     let (pw, ph) = (((bounds.width() * s).ceil() as u32).clamp(1, 4096), ((bounds.height() * s).ceil() as u32).clamp(1, 4096));
-    let outline = if kind == "shape" { polygons(path) } else { Vec::new() };
+    let outline = if kind == "shape" {
+        let pixels = u64::from(pw).saturating_mul(u64::from(ph)).max(1);
+        let max_edges = usize::try_from(MAX_EDGE_WORK / pixels).unwrap_or(usize::MAX).max(MIN_POLY_EDGES);
+        let pixel = (bounds.width() / f64::from(pw)).min(bounds.height() / f64::from(ph));
+        simplify(polygons(path), pixel, max_edges)
+    } else {
+        Vec::new()
+    };
     let lut = ramp(stops);
     let a = alpha.clamp(0.0, 1.0);
     let mut data = Vec::with_capacity((pw * ph) as usize);
@@ -205,6 +305,71 @@ mod tests {
         tri.close_path();
         let polys = polygons(&tri);
         assert!((position("shape", b, CENTRE, &polys, Point::new(140.0, 50.0)) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn shape_paths_from_off_the_shape_or_a_focus_box() {
+        let b = Rect::new(0.0, 0.0, 280.0, 200.0);
+        let ellipse = polygons(&kurbo::Ellipse::from_rect(b).to_path(0.01));
+        // Focus on the box's corner, outside the ellipse: contours are the ellipse shrunk towards
+        // the corner, so its far edge is the end and its middle part way (it was all the end
+        // colour).
+        let corner = [0.0, 0.0, 1.0, 1.0];
+        let mid = position("shape", b, corner, &ellipse, Point::new(140.0, 100.0));
+        assert!(mid > 0.3 && mid < 0.8, "{mid}");
+        assert!(position("shape", b, corner, &ellipse, Point::new(279.0, 100.0)) > 0.95);
+        // A focus rectangle is the first colour inside, and the colour runs from its edge out.
+        let boxed = [0.25, 0.25, 0.25, 0.25];
+        assert_eq!(position("shape", b, boxed, &ellipse, Point::new(150.0, 110.0)), 0.0);
+        let half = position("shape", b, boxed, &ellipse, Point::new(140.0 + 70.0 + 35.0, 100.0));
+        assert!((half - 0.5).abs() < 0.02, "{half}");
+    }
+
+    fn many_segment_square(n: usize) -> BezPath {
+        // A 200x200 square whose sides are split into `n` segments each.
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        let corners = [(200.0, 0.0), (200.0, 200.0), (0.0, 200.0), (0.0, 0.0)];
+        let mut from = (0.0, 0.0);
+        for to in corners {
+            for i in 1..=n {
+                let t = i as f64 / n as f64;
+                p.line_to((from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t));
+            }
+            from = to;
+        }
+        p.close_path();
+        p
+    }
+
+    #[test]
+    fn dense_outlines_are_simplified_to_the_work_budget() {
+        // Below the per-polygon flatten cap, so the simplifier has to do the work.
+        let polys = polygons(&many_segment_square(20_000));
+        assert!(polys.iter().map(|p| p.len() - 1).sum::<usize>() >= 80_000);
+        let b = Rect::new(0.0, 0.0, 200.0, 200.0);
+        let simple = simplify(polys, 200.0 / 384.0, 400);
+        let edges: usize = simple.iter().map(|p| p.len() - 1).sum();
+        assert!((MIN_POLY_EDGES..=400).contains(&edges), "{edges}");
+        // Still the square: half way to a side or a corner is 0.5.
+        for q in [Point::new(150.0, 100.0), Point::new(150.0, 150.0), Point::new(100.0, 50.0)] {
+            let t = position("shape", b, CENTRE, &simple, q);
+            assert!((t - 0.5).abs() < 0.01, "{q:?} {t}");
+        }
+        // Small outlines pass through untouched.
+        let tri = vec![vec![Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(0.0, 1.0), Point::new(0.0, 0.0)]];
+        assert_eq!(simplify(tri.clone(), 10.0, 400), tri);
+    }
+
+    #[test]
+    fn a_dense_shape_gradient_renders_promptly() {
+        let path = many_segment_square(20_000);
+        let mut ctx = RenderContext::new(400, 400);
+        let stops = [(0.0, Rgba::rgb(0, 0, 0)), (1.0, Rgba::rgb(255, 255, 255))];
+        let t = std::time::Instant::now();
+        fill(&mut ctx, "shape", CENTRE, &stops, Rect::new(0.0, 0.0, 200.0, 200.0), &path, Affine::scale(2.0), 1.0);
+        // Unbudgeted this is 147k pixels × 80k edges ≈ 1.2e10 tests (minutes); budgeted, well under a second in release.
+        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
     }
 
     #[test]

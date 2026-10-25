@@ -54,11 +54,31 @@ pub struct GlyphRun {
     pub para: usize,
     pub chars: (usize, usize),
     pub link: bool,
-    /// Alpha of the fill (0–1).
+    /// Opacity of the fill on top of `color`'s own alpha (0 for no fill).
     pub alpha: f64,
     pub gradient: Option<deckcraft_model::style::Gradient>,
     /// Shadow and glow behind the glyphs (`a:rPr/a:effectLst`).
     pub effects: Option<RunEffects>,
+    /// East Asian vertical text (`eaVert`): each glyph stands upright, turned a quarter turn
+    /// back about the centre of its em box ([`GlyphRun::upright_centre`]) inside text that is
+    /// laid out turned a quarter turn.
+    pub upright: bool,
+}
+
+/// Share of the size the ideographic em box's centre sits above the baseline (CJK fonts put the
+/// em box from 0.88 em above to 0.12 em below it).
+pub const UPRIGHT_CENTRE: f64 = 0.38;
+
+impl GlyphRun {
+    /// The point an upright glyph at pen position (`x`, `y`) turns about: the centre of its em box,
+    /// `advance` wide (`None` when the run is not upright).
+    pub fn upright_centre(&self, gid: u32, x: f64, y: f64) -> Option<(f64, f64)> {
+        if !self.upright {
+            return None;
+        }
+        let adv = self.face.advance(gid) * self.size / self.face.upem.max(1.0);
+        Some((x + adv / 2.0, y - self.size * UPRIGHT_CENTRE))
+    }
 }
 
 /// A text run's shadow and glow, colours resolved.
@@ -93,6 +113,150 @@ pub struct Deco {
     pub behind: bool,
     /// Paragraph the decoration belongs to (by-paragraph animation).
     pub para: usize,
+    /// How the line fills `rect`.
+    pub line: DecoLine,
+}
+
+/// How an underline fills its box.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum DecoLine {
+    /// The whole box.
+    #[default]
+    Solid,
+    /// Dashes or dots across the box's height, from its left end.
+    Dashed(Dash),
+    /// A zigzag between the box's top and bottom: `stroke` wide, one wave every `period`.
+    Wave { stroke: f64, period: f64 },
+}
+
+/// Dash patterns of the dotted and dashed underlines, in units of the line's thickness. Measured
+/// on PowerPoint's export: dots and their gaps as long as the line is thick, dashes three
+/// thicknesses long with gaps of two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dash {
+    Dot,
+    Dash,
+    Long,
+    DotDash,
+    DotDotDash,
+}
+
+impl Dash {
+    /// On, off, on, off… lengths in thicknesses.
+    fn pattern(self) -> &'static [f64] {
+        match self {
+            Dash::Dot => &[1.0, 1.0],
+            Dash::Dash => &[3.0, 2.0],
+            Dash::Long => &[6.0, 2.0],
+            Dash::DotDash => &[3.0, 2.0, 1.0, 2.0],
+            Dash::DotDotDash => &[3.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+        }
+    }
+}
+
+impl Deco {
+    /// The filled boxes of a solid or dashed line (dashes start at the box's left end). A wavy
+    /// line gives a thin box along its middle, for drawing that can't stroke a path.
+    pub fn pieces(&self) -> Vec<Rect> {
+        let r = self.rect;
+        match self.line {
+            DecoLine::Solid => vec![r],
+            DecoLine::Wave { stroke, .. } => {
+                let c = (r.y0 + r.y1) / 2.0;
+                vec![Rect::new(r.x0, c - stroke / 2.0, r.x1, c + stroke / 2.0)]
+            }
+            DecoLine::Dashed(d) => {
+                let unit = r.height().max(0.1);
+                let pat = d.pattern();
+                let mut out = Vec::new();
+                let mut x = r.x0;
+                let mut k = 0usize;
+                while x < r.x1 && out.len() < 10_000 {
+                    let len = pat.get(k % pat.len()).copied().unwrap_or(1.0) * unit;
+                    if k.is_multiple_of(2) {
+                        out.push(Rect::new(x, r.y0, (x + len).min(r.x1), r.y1));
+                    }
+                    x += len;
+                    k += 1;
+                }
+                out
+            }
+        }
+    }
+
+    /// The zigzag of a wavy underline, left to right from the box's top, and its stroke width;
+    /// None for other lines.
+    pub fn wave(&self) -> Option<(Vec<Point>, f64)> {
+        let DecoLine::Wave { stroke, period } = self.line else { return None };
+        let r = self.rect;
+        let half = (period / 2.0).max(0.1);
+        let n = ((r.width().max(0.0) / half).ceil() as usize).min(20_000);
+        let pts = (0..=n)
+            .map(|i| {
+                let x = (r.x0 + i as f64 * half).min(r.x1);
+                Point::new(x, if i % 2 == 0 { r.y0 } else { r.y1 })
+            })
+            .collect();
+        Some((pts, stroke))
+    }
+}
+
+/// An underline style (`a:rPr/@u`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Underline {
+    Single,
+    Double,
+    Heavy,
+    /// Dotted or dashed, heavy or not.
+    Dashed(Dash, bool),
+    /// Wavy, heavy or not.
+    Wavy(bool),
+}
+
+impl Underline {
+    fn from_xml(u: &str) -> Option<Self> {
+        Some(match u {
+            "none" => return None,
+            // PowerPoint underlines the spaces of a "words" underline too.
+            "words" => Underline::Single,
+            // At text sizes PowerPoint's double wave reads as two straight lines.
+            "dbl" | "wavyDbl" => Underline::Double,
+            "heavy" => Underline::Heavy,
+            "dotted" => Underline::Dashed(Dash::Dot, false),
+            "dottedHeavy" => Underline::Dashed(Dash::Dot, true),
+            "dash" => Underline::Dashed(Dash::Dash, false),
+            "dashHeavy" => Underline::Dashed(Dash::Dash, true),
+            "dashLong" => Underline::Dashed(Dash::Long, false),
+            "dashLongHeavy" => Underline::Dashed(Dash::Long, true),
+            "dotDash" => Underline::Dashed(Dash::DotDash, false),
+            "dotDashHeavy" => Underline::Dashed(Dash::DotDash, true),
+            "dotDotDash" => Underline::Dashed(Dash::DotDotDash, false),
+            "dotDotDashHeavy" => Underline::Dashed(Dash::DotDotDash, true),
+            "wavy" => Underline::Wavy(false),
+            "wavyHeavy" => Underline::Wavy(true),
+            _ => Underline::Single,
+        })
+    }
+
+    /// The boxes of this underline below the baseline (top, bottom, fill), from the font's
+    /// underline position `p` and thickness `t` at the run's size. Measured on PowerPoint's export
+    /// (Arial 96 pt: p = 10.2, t = 7.0): single at p..p+t; heavy from p-t to p+0.55t; double as two
+    /// lines 0.55t thick spanning p-t..p+t; wavy a thin zigzag from p-0.6t to p+1.1t, a wave every
+    /// 3.9t.
+    fn boxes(self, p: f64, t: f64) -> Vec<(f64, f64, DecoLine)> {
+        let heavy = (p - t, p + 0.55 * t);
+        match self {
+            Underline::Single => vec![(p, p + t, DecoLine::Solid)],
+            Underline::Heavy => vec![(heavy.0, heavy.1, DecoLine::Solid)],
+            Underline::Double => vec![(p - t, p - 0.45 * t, DecoLine::Solid), (p + 0.45 * t, p + t, DecoLine::Solid)],
+            Underline::Dashed(d, false) => vec![(p, p + t, DecoLine::Dashed(d))],
+            Underline::Dashed(d, true) => vec![(heavy.0, heavy.1, DecoLine::Dashed(d))],
+            Underline::Wavy(h) => {
+                let stroke = (t * 0.15).max(0.4) * if h { 2.0 } else { 1.0 };
+                vec![(p - 0.6 * t, p + 1.1 * t, DecoLine::Wave { stroke, period: t * 3.9 })]
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -128,6 +292,9 @@ pub struct LineInfo {
 #[derive(Clone, Debug, Default)]
 pub struct TextLayout {
     pub runs: Vec<GlyphRun>,
+    /// Empty list markers for the editor only; ordinary rendering and export omit them.
+    /// Their space is still reserved so the caret starts where the first character will.
+    pub empty_bullets: Vec<GlyphRun>,
     pub decos: Vec<Deco>,
     pub lines: Vec<LineInfo>,
     /// Inner text box (insets applied), shape-local.
@@ -187,7 +354,7 @@ struct Style {
     baseline: f64,
     spacing: f64,
     caps: Caps,
-    underline: Option<Rgba>,
+    underline: Option<(Rgba, Underline)>,
     strike: Option<Strike>,
     highlight: Option<Rgba>,
     outline: Option<(Rgba, f64)>,
@@ -201,6 +368,9 @@ struct Style {
     /// The `a:ea` and `a:cs` families (theme references resolved), if the document names one.
     ea: Option<String>,
     cs: Option<String>,
+    /// The `a:sym` family: private-use characters (U+F000–U+F0FF, as PowerPoint stores symbol-font
+    /// characters) are drawn in it.
+    sym: Option<String>,
     /// Heading font (`+mj-…`): the theme's major font set applies.
     major: bool,
     /// Pair kerning on: `a:rPr/@kern` is set and the size reaches it.
@@ -224,6 +394,8 @@ struct Cell {
     head: usize,
     /// A grapheme starts here: carets stand and lines break only before such cells.
     boundary: bool,
+    /// Drawn upright in East Asian vertical text.
+    upright: bool,
 }
 
 impl Cell {
@@ -241,6 +413,9 @@ struct ParaShaped {
     /// Size of the paragraph's first run (spacing percentages, empty lines).
     lead_size: f64,
     lead_face: Arc<FontFace>,
+    /// Size of the paragraph mark (`a:endParaRPr`): what an empty last line is sized by.
+    end_size: f64,
+    end_face: Arc<FontFace>,
     bullet: Option<(String, Style)>,
     #[allow(dead_code)]
     level: u8,
@@ -266,7 +441,8 @@ fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Styl
     let fake_italic = italic && !face.italic;
     let size = (r.size.unwrap_or(18.0) * scale).clamp(0.5, 4000.0);
     let (mut color, alpha, gradient) = match &r.fill {
-        Some(Fill::Solid { color }) => (ctx.color(color, None), color.alpha(), None),
+        // The resolved colour carries the fill's transparency (`a:alpha`): it is applied once.
+        Some(Fill::Solid { color }) => (ctx.color(color, None), 1.0, None),
         Some(Fill::Gradient(g)) => {
             // Colours resolved here (theme, colour map), so the renderer needs no colour scheme.
             let mut g = g.clone();
@@ -289,7 +465,8 @@ fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Styl
     };
     let ea = slot_family(&r.font_ea, if major { "+mj-ea" } else { "+mn-ea" });
     let cs = slot_family(&r.font_cs, if major { "+mj-cs" } else { "+mn-cs" });
-    let underline = r.underline.as_deref().filter(|u| *u != "none").map(|_| r.underline_color.as_ref().map(|c| ctx.color(c, None)).unwrap_or(color));
+    let underline =
+        r.underline.as_deref().and_then(Underline::from_xml).map(|u| (r.underline_color.as_ref().map(|c| ctx.color(c, None)).unwrap_or(color), u));
     let outline = r.outline.as_ref().and_then(|l| match &l.fill {
         Some(Fill::Solid { color: c }) => Some((ctx.color(c, None), l.width.unwrap_or(0.75))),
         _ => None,
@@ -315,6 +492,7 @@ fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Styl
         lang: r.lang.clone().filter(|l| !l.is_empty()),
         ea,
         cs,
+        sym: r.font_sym.as_deref().map(|f| ctx.master.theme.font(f)).filter(|f| !f.trim().is_empty()),
         major,
         kern: r.kern.is_some_and(|k| k > 0.0 && size + 1e-6 >= k * scale),
     }
@@ -351,10 +529,12 @@ fn face_chain(ctx: &Ctx, st: &Style, slot: FontSlot, script: Option<ScriptTag>) 
     chain
 }
 
-fn spacing_pts(s: Option<Spacing>, size: f64, reduce: f64) -> f64 {
+/// Space before or after a paragraph, points. Shrink-on-overflow's line spacing reduction
+/// doesn't apply to it (PowerPoint keeps it).
+fn spacing_pts(s: Option<Spacing>, size: f64) -> f64 {
     match s {
-        Some(Spacing::Pct(p)) => p * size * 1.2 * (1.0 - reduce),
-        Some(Spacing::Pts(v)) => v * (1.0 - reduce),
+        Some(Spacing::Pct(p)) => p * size * 1.2,
+        Some(Spacing::Pts(v)) => v,
         None => 0.0,
     }
 }
@@ -392,45 +572,136 @@ fn alpha_num(n: u32, upper: bool) -> String {
     if n == 0 {
         return String::new();
     }
-    let mut n = n - 1;
+    let n = n - 1;
     let c = (b'a' + (n % 26) as u8) as char;
-    let reps = n / 26 + 1;
-    n = reps;
-    let s: String = std::iter::repeat_n(c, n as usize).collect();
+    let reps = (n / 26 + 1).min(50);
+    let s: String = std::iter::repeat_n(c, reps as usize).collect();
     if upper { s.to_uppercase() } else { s }
 }
 
-/// Text of an auto-number bullet: `arabicPeriod` 3 → "3.".
+/// Letters of a numbering alphabet: 1 → the first, past the end the letter doubles ("aa"), as
+/// the Latin alphabetic schemes do.
+fn letters(list: &[char], n: u32) -> String {
+    let len = list.len().max(1) as u32;
+    let Some(i) = n.checked_sub(1) else { return String::new() };
+    let c = list.get((i % len) as usize).copied().unwrap_or('?');
+    std::iter::repeat_n(c, (i / len + 1).min(50) as usize).collect()
+}
+
+/// `n` written with the digits `zero..zero+9` (Thai, Devanagari, full-width digits).
+fn digits_in(n: u32, zero: char) -> String {
+    n.to_string().chars().map(|d| d.to_digit(10).and_then(|v| char::from_u32(zero as u32 + v)).unwrap_or(d)).collect()
+}
+
+const CJK_DIGITS: [char; 10] = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+
+/// Chinese numerals: 10 → 十, 11 → 十一, 25 → 二十五, 105 → 一百零五.
+fn chinese_num(n: u32) -> String {
+    if n == 0 || n > 99_999 {
+        return n.to_string();
+    }
+    let units = ['\0', '十', '百', '千', '万'];
+    let ds: Vec<u32> = n.to_string().chars().filter_map(|c| c.to_digit(10)).collect();
+    let mut out = String::new();
+    let mut zero = false;
+    for (i, d) in ds.iter().enumerate() {
+        let place = ds.len() - 1 - i;
+        if *d == 0 {
+            zero = true;
+            continue;
+        }
+        if zero {
+            out.push('零');
+            zero = false;
+        }
+        // "十" alone for 10–19, not "一十".
+        if !(*d == 1 && place == 1 && i == 0) {
+            out.push(CJK_DIGITS.get(*d as usize).copied().unwrap_or('?'));
+        }
+        if let Some(u) = units.get(place).filter(|u| **u != '\0') {
+            out.push(*u);
+        }
+    }
+    out
+}
+
+/// Text of an auto-number bullet: `arabicPeriod` 3 → "3.". The East Asian, Thai, Hindi, Arabic
+/// and Hebrew schemes are written as PowerPoint draws them: `ea1ChsPeriod` 10 → "十．",
+/// `ea1JpnKorPeriod` 10 → "一〇．" (digit by digit), `arabicDbPeriod` 13 → "１３．",
+/// `thaiAlphaParenR` 4 → "ง)", `hindiAlpha1Period` 1 → "क.", `arabic2Minus` 10 → "ي-"
+/// (abjad order), `circleNumWdWhitePlain` 13 → "③" (those circles go to ten).
 pub fn autonum(scheme: &str, n: u32) -> String {
-    let (core, upper) = if scheme.starts_with("romanUc") {
-        (roman(n, true), true)
+    const THAI: [char; 41] = [
+        'ก', 'ข', 'ค', 'ง', 'จ', 'ฉ', 'ช', 'ซ', 'ฌ', 'ญ', 'ฎ', 'ฏ', 'ฐ', 'ฑ', 'ฒ', 'ณ', 'ด', 'ต', 'ถ', 'ท', 'ธ', 'น', 'บ', 'ป', 'ผ', 'ฝ', 'พ', 'ฟ',
+        'ภ', 'ม', 'ย', 'ร', 'ล', 'ว', 'ศ', 'ษ', 'ส', 'ห', 'ฬ', 'อ', 'ฮ',
+    ];
+    const HINDI_VOWELS: [char; 11] = ['अ', 'आ', 'इ', 'ई', 'उ', 'ऊ', 'ऋ', 'ए', 'ऐ', 'ओ', 'औ'];
+    const HINDI_CONSONANTS: [char; 33] = [
+        'क', 'ख', 'ग', 'घ', 'ङ', 'च', 'छ', 'ज', 'झ', 'ञ', 'ट', 'ठ', 'ड', 'ढ', 'ण', 'त', 'थ', 'द', 'ध', 'न', 'प', 'फ', 'ब', 'भ', 'म', 'य', 'र', 'ल',
+        'व', 'श', 'ष', 'स', 'ह',
+    ];
+    const ARABIC_ALPHABET: [char; 28] =
+        ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي'];
+    const ARABIC_ABJAD: [char; 28] =
+        ['ا', 'ب', 'ج', 'د', 'ه', 'و', 'ز', 'ح', 'ط', 'ي', 'ك', 'ل', 'م', 'ن', 'س', 'ع', 'ف', 'ص', 'ق', 'ر', 'ش', 'ت', 'ث', 'خ', 'ذ', 'ض', 'ظ', 'غ'];
+    const HEBREW: [char; 22] = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת'];
+    let circled = |first: u32, count: u32| char::from_u32(first + n.saturating_sub(1) % count).map(String::from).unwrap_or_else(|| n.to_string());
+    let core = if scheme.starts_with("romanUc") {
+        roman(n, true)
     } else if scheme.starts_with("romanLc") {
-        (roman(n, false), false)
+        roman(n, false)
     } else if scheme.starts_with("alphaUc") {
-        (alpha_num(n, true), true)
+        alpha_num(n, true)
     } else if scheme.starts_with("alphaLc") {
-        (alpha_num(n, false), false)
+        alpha_num(n, false)
+    } else if scheme.starts_with("circleNumWdWhite") {
+        return circled(0x2460, 10);
+    } else if scheme.starts_with("circleNumWdBlack") {
+        return circled(0x2776, 10);
     } else if scheme.starts_with("circleNum") {
-        let c = char::from_u32(0x2460 + n.saturating_sub(1).min(19)).unwrap_or('•');
-        return c.to_string();
+        return char::from_u32(0x2460 + n.saturating_sub(1).min(19)).map(String::from).unwrap_or_else(|| n.to_string());
+    } else if scheme.starts_with("ea1Chs") || scheme.starts_with("ea1Cht") {
+        chinese_num(n)
+    } else if scheme.starts_with("ea1Jpn") {
+        n.to_string().chars().map(|d| d.to_digit(10).and_then(|v| CJK_DIGITS.get(v as usize).copied()).unwrap_or(d)).collect()
+    } else if scheme.starts_with("arabicDb") {
+        digits_in(n, '０')
+    } else if scheme.starts_with("thaiAlpha") {
+        letters(&THAI, n)
+    } else if scheme.starts_with("thaiNum") {
+        digits_in(n, '๐')
+    } else if scheme.starts_with("hindiAlpha1") {
+        letters(&HINDI_CONSONANTS, n)
+    } else if scheme.starts_with("hindiAlpha") {
+        letters(&HINDI_VOWELS, n)
+    } else if scheme.starts_with("hindiNum") {
+        digits_in(n, '०')
+    } else if scheme.starts_with("arabic1") {
+        letters(&ARABIC_ALPHABET, n)
+    } else if scheme.starts_with("arabic2") {
+        letters(&ARABIC_ABJAD, n)
+    } else if scheme.starts_with("hebrew2") {
+        letters(&HEBREW, n)
     } else {
-        (n.to_string(), false)
+        n.to_string()
     };
-    let _ = upper;
+    // East Asian schemes end with a full-width full stop.
+    let wide = scheme.starts_with("ea1") || scheme.starts_with("arabicDb");
     if scheme.ends_with("ParenBoth") {
         format!("({core})")
     } else if scheme.ends_with("ParenR") {
         format!("{core})")
     } else if scheme.ends_with("Period") {
-        format!("{core}.")
+        format!("{core}{}", if wide { '．' } else { '.' })
     } else if scheme.ends_with("Minus") {
-        format!("- {core} -")
+        format!("{core}-")
     } else {
         core
     }
 }
 
-fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, opts: &Opts, number: Option<u32>) -> ParaShaped {
+#[allow(clippy::too_many_arguments)]
+fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, opts: &Opts, number: Option<u32>, vertical: Upright) -> ParaShaped {
     let db = FontDb::global();
     let Some(para) = body.paragraphs.get(pi) else {
         let face = db.face("Inter", "Regular");
@@ -440,7 +711,9 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
             faces: vec![],
             props: ParaProps::default(),
             lead_size: 18.0,
-            lead_face: face,
+            lead_face: face.clone(),
+            end_size: 18.0,
+            end_face: face,
             bullet: None,
             level: 0,
             rtl: false,
@@ -467,64 +740,63 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
         char_style.extend(std::iter::repeat_n(si, t.chars().count()));
         text.push_str(&t);
     }
-    let cells = shape_cells(ctx, &text, &char_style, &styles, &mut faces, rtl);
+    let cells = shape_cells(ctx, &text, &char_style, &styles, &mut faces, rtl, vertical);
     let lead = para.runs.first().map(|r| resolve::run(ctx, shape, para, &r.props)).unwrap_or_else(|| resolve::run(ctx, shape, para, &para.end_props));
     let lead_style = make_style(ctx, &lead, scale, opts.prompt_color);
     let lead_size = lead_style.size;
     let lead_face = lead_style.face.clone();
+    // The paragraph mark, which ends the last line when no break does.
+    let end_style = make_style(ctx, &resolve::run(ctx, shape, para, &para.end_props), scale, opts.prompt_color);
+    let (end_size, end_face) = (end_style.size, end_style.face.clone());
     // Bullet.
-    let bullet = if para.is_empty() && opts.prompt_color.is_none() {
-        None
-    } else {
-        match &props.bullet {
-            Some(Bullet::Char { char }) => {
-                let mut rp = lead.clone();
-                if let Some(f) = &props.bullet_font {
-                    rp.font = Some(f.clone());
-                }
-                rp.bold = Some(false);
-                rp.italic = Some(false);
-                if let Some(c) = &props.bullet_color {
-                    rp.fill = Some(Fill::solid(c.clone()));
-                }
-                rp.size = Some(lead.size.unwrap_or(18.0) * props.bullet_size.unwrap_or(1.0));
-                rp.underline = None;
-                rp.strike = None;
-                rp.highlight = None;
-                let mut st = make_style(ctx, &rp, scale, opts.prompt_color);
-                st.baseline = 0.0;
-                // Symbol fonts (Wingdings) aren't available: map common private-use bullets.
-                let ch = map_symbol_bullet(char, props.bullet_font.as_deref());
-                bullet_face(db, &mut st, &ch);
+    let bullet = match &props.bullet {
+        Some(Bullet::Char { char }) => {
+            let mut rp = lead.clone();
+            if let Some(f) = &props.bullet_font {
+                rp.font = Some(f.clone());
+            }
+            rp.bold = Some(false);
+            rp.italic = Some(false);
+            if let Some(c) = &props.bullet_color {
+                rp.fill = Some(Fill::solid(c.clone()));
+            }
+            rp.size = Some(lead.size.unwrap_or(18.0) * props.bullet_size.unwrap_or(1.0));
+            rp.underline = None;
+            rp.strike = None;
+            rp.highlight = None;
+            let mut st = make_style(ctx, &rp, scale, opts.prompt_color);
+            st.baseline = 0.0;
+            // Symbol fonts (Wingdings) aren't available: map common private-use bullets.
+            let ch = map_symbol_bullet(char, props.bullet_font.as_deref());
+            bullet_face(db, &mut st, &ch);
 
-                // A symbol font (Wingdings, Symbol…) that is installed draws its own glyph, found
-                // at U+F000 + the character code as such fonts map them; otherwise common symbol
-                // bullets are mapped to Unicode look-alikes.
-                let ch = match symbol_font_char(&st.face, char, props.bullet_font.as_deref()) {
-                    Some(c) => c.to_string(),
-                    None => map_symbol_bullet(char, props.bullet_font.as_deref()),
-                };
-                if !st.face.covers(ch.chars().next().unwrap_or('•')) {
-                    st.face = db.face("Inter", "Regular");
-                }
-                Some((ch, st))
+            // A symbol font (Wingdings, Symbol…) that is installed draws its own glyph, found
+            // at U+F000 + the character code as such fonts map them; otherwise common symbol
+            // bullets are mapped to Unicode look-alikes.
+            let ch = match symbol_font_char(&st.face, char, props.bullet_font.as_deref()) {
+                Some(c) => c.to_string(),
+                None => map_symbol_bullet(char, props.bullet_font.as_deref()),
+            };
+            if !st.face.covers(ch.chars().next().unwrap_or('•')) {
+                st.face = db.face("Inter", "Regular");
             }
-            Some(Bullet::AutoNum { scheme, start_at }) => {
-                let mut rp = lead.clone();
-                if let Some(c) = &props.bullet_color {
-                    rp.fill = Some(Fill::solid(c.clone()));
-                }
-                rp.size = Some(lead.size.unwrap_or(18.0) * props.bullet_size.unwrap_or(1.0));
-                rp.underline = None;
-                let mut st = make_style(ctx, &rp, scale, opts.prompt_color);
-                let label = autonum(scheme, start_at.saturating_sub(1).saturating_add(number.unwrap_or(1)));
-                bullet_face(db, &mut st, &label);
-                Some((label, st))
-            }
-            _ => None,
+            Some((ch, st))
         }
+        Some(Bullet::AutoNum { scheme, start_at }) => {
+            let mut rp = lead.clone();
+            if let Some(c) = &props.bullet_color {
+                rp.fill = Some(Fill::solid(c.clone()));
+            }
+            rp.size = Some(lead.size.unwrap_or(18.0) * props.bullet_size.unwrap_or(1.0));
+            rp.underline = None;
+            let mut st = make_style(ctx, &rp, scale, opts.prompt_color);
+            let label = autonum(scheme, start_at.saturating_sub(1).saturating_add(number.unwrap_or(1)));
+            bullet_face(db, &mut st, &label);
+            Some((label, st))
+        }
+        _ => None,
     };
-    ParaShaped { cells, styles, faces, props, lead_size, lead_face, bullet, level: para.level, rtl }
+    ParaShaped { cells, styles, faces, props, lead_size, lead_face, end_size, end_face, bullet, level: para.level, rtl }
 }
 
 /// A face that draws the bullet `label` when the bullet's own can't (circled numbers ①, arrows
@@ -548,7 +820,16 @@ fn run_effects(ctx: &Ctx, r: &RunProps, scale: f64) -> Option<RunEffects> {
     (shadow.is_some() || glow.is_some()).then_some(RunEffects { shadow, glow })
 }
 
-fn shape_cells(ctx: &Ctx, text: &str, char_style: &[usize], styles: &[Style], faces: &mut Vec<Arc<FontFace>>, rtl: bool) -> Vec<Cell> {
+#[allow(clippy::too_many_arguments)]
+fn shape_cells(
+    ctx: &Ctx,
+    text: &str,
+    char_style: &[usize],
+    styles: &[Style],
+    faces: &mut Vec<Arc<FontFace>>,
+    rtl: bool,
+    vertical: Upright,
+) -> Vec<Cell> {
     let db = FontDb::global();
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
@@ -556,7 +837,9 @@ fn shape_cells(ctx: &Ctx, text: &str, char_style: &[usize], styles: &[Style], fa
     let mut byte_of: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
     byte_of.push(text.len());
     let char_at_byte: HashMap<usize, usize> = byte_of.iter().enumerate().map(|(i, b)| (*b, i)).collect();
-    let levels = bidi::levels(text, &chars, rtl);
+    let style_rtl: Vec<bool> = styles.iter().map(|st| st.lang.as_deref().is_some_and(bidi::is_rtl_lang)).collect();
+    let rtl_lang: Vec<bool> = char_style.iter().map(|&si| style_rtl.get(si).copied().unwrap_or(false)).collect();
+    let levels = bidi::levels_lang(text, &chars, rtl, &rtl_lang);
     let scripts = script::resolve(&chars);
     let mut boundary = vec![false; n];
     let mut graphemes: Vec<(usize, usize)> = Vec::new();
@@ -588,9 +871,24 @@ fn shape_cells(ctx: &Ctx, text: &str, char_style: &[usize], styles: &[Style], fa
         // Emoji, and pictographs asked to look like text (U+FE0E), pick their own face.
         let neutral =
             cluster.iter().all(|c| script::script_of(*c).is_none()) && !deckcraft_fonts::is_emoji_cluster(cluster) && !cluster.contains(&'\u{FE0E}');
-        let face = match prev.as_ref() {
-            Some(p) if neutral && deckcraft_fonts::covers_cluster(p, cluster) && char_style.get(a.wrapping_sub(1)) == Some(&si) => p.clone(),
-            _ => {
+        // A symbol-font character (U+F0xx) with an `a:sym` font draws in that font when it's there.
+        // Some installed Symbol faces (Apple's on macOS) have no private-use mapping: they map the
+        // glyphs to real Unicode, so the PUA code is remapped to that character when shaping.
+        let sym_face = st
+            .sym
+            .as_deref()
+            .filter(|_| cluster.first().is_some_and(|c| ('\u{F000}'..='\u{F0FF}').contains(c)))
+            .filter(|f| db.has_family(f))
+            .map(|f| db.face(f, st.style_name))
+            .filter(|f| covers_symbol(f, cluster.first().copied().unwrap_or(' ')));
+        let face = match (sym_face, prev.as_ref()) {
+            (Some(f), _) => f,
+            (None, Some(p))
+                if neutral && !p.is_color() && deckcraft_fonts::covers_cluster(p, cluster) && char_style.get(a.wrapping_sub(1)) == Some(&si) =>
+            {
+                p.clone()
+            }
+            (None, _) => {
                 let chain = chains.entry((si, slot, sc)).or_insert_with(|| face_chain(ctx, st, slot, sc));
                 db.cascade(cluster, chain, st.style_name)
             }
@@ -611,23 +909,116 @@ fn shape_cells(ctx: &Ctx, text: &str, char_style: &[usize], styles: &[Style], fa
             adv: 0.0,
             head: i,
             boundary: boundary.get(i).copied().unwrap_or(true),
+            upright: false,
         })
         .collect();
+    // In East Asian vertical text, ideographs, kana, Hangul, full-width forms and the like stand
+    // upright (a whole grapheme at a time); other text lies on its side.
+    if vertical != Upright::None {
+        for &(a, b) in &graphemes {
+            let up = chars.get(a).is_some_and(|c| if vertical == Upright::All { !c.is_whitespace() } else { is_upright(*c) });
+            for c in cells.get_mut(a..b).into_iter().flatten() {
+                c.upright = up;
+            }
+        }
+    }
     // Items: maximal ranges of one level, face, script and shaping style (case mapping, language).
     let upper = |i: usize| styles.get(char_style.get(i).copied().unwrap_or(0)).is_some_and(|st| st.caps != Caps::None);
     let lang = |i: usize| styles.get(char_style.get(i).copied().unwrap_or(0)).and_then(|st| st.lang.as_deref());
     let kern = |i: usize| styles.get(char_style.get(i).copied().unwrap_or(0)).is_some_and(|st| st.kern);
-    let key = |i: usize| (levels.get(i).copied(), char_face.get(i).copied(), scripts.get(i).map(|s| s.0), upper(i), lang(i), kern(i));
+    let up = |i: usize| cells.get(i).is_some_and(|c| c.upright);
+    let key = |i: usize| (levels.get(i).copied(), char_face.get(i).copied(), scripts.get(i).map(|s| s.0), upper(i), lang(i), kern(i), up(i));
+    let mut items: Vec<(usize, usize)> = Vec::new();
     let mut a = 0;
     while a < n {
         let mut b = a + 1;
         while b < n && key(b) == key(a) {
             b += 1;
         }
-        shape_item(&mut cells, styles, faces, text, &byte_of, &char_at_byte, a..b, scripts.get(a).and_then(|s| s.0), lang(a), upper(a));
+        items.push((a, b));
         a = b;
     }
+    // Upright glyphs keep their horizontal forms: PowerPoint turns "、", "。" and "「" as they are
+    // (no `vert` alternates).
+    for (a, b) in items {
+        shape_item(&mut cells, styles, faces, text, &byte_of, &char_at_byte, a..b, scripts.get(a).and_then(|s| s.0), lang(a), upper(a));
+    }
+    // Stacked text: each character takes one em down the line, centred across it (PowerPoint
+    // stacks 18 pt Latin letters about 18 pt apart, a space only its own width).
+    if vertical == Upright::All {
+        for i in 0..n {
+            let Some(c) = cells.get(i) else { continue };
+            if !c.upright || c.head != i || c.glyphs.is_empty() {
+                continue;
+            }
+            let size = styles.get(c.style).map(|st| st.size).unwrap_or(18.0);
+            let width: f64 = (i..n).take_while(|&j| cells.get(j).is_some_and(|d| d.head == i)).filter_map(|j| cells.get(j)).map(|d| d.adv).sum();
+            let pad = (size - width) / 2.0;
+            if let Some(c) = cells.get_mut(i) {
+                for g in &mut c.glyphs {
+                    g.1 += pad;
+                }
+            }
+            for j in i..n {
+                match cells.get_mut(j) {
+                    Some(d) if d.head == i => d.adv = if j == i { size } else { 0.0 },
+                    _ => break,
+                }
+            }
+        }
+    }
     cells
+}
+
+/// A character in capitals (`cap="all"`/`"small"`): its uppercase when that is one character.
+/// PowerPoint leaves characters whose capital is a sequence as they are: "ß" stays "ß" (not "SS"),
+/// "ﬁ" and "ŉ" stay.
+fn caps_char(ch: char) -> char {
+    let mut up = ch.to_uppercase();
+    match (up.next(), up.next()) {
+        (Some(u), None) => u,
+        _ => ch,
+    }
+}
+
+/// Does `c` stand upright in East Asian vertical text? Ideographs, kana, Hangul, Bopomofo, CJK
+/// symbols and punctuation, full-width forms, enclosed and compatibility CJK, circled numbers
+/// and emoji (Unicode's Vertical_Orientation U and T, roughly); Latin, digits and the rest of the
+/// half-width text lie on their side as in `vert`.
+fn is_upright(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF
+            | 0x2460..=0x24FF
+            | 0x2E80..=0x2FFF
+            | 0x3000..=0x303F
+            | 0x3040..=0x30FF
+            | 0x3100..=0x312F
+            | 0x3130..=0x318F
+            | 0x3190..=0x31FF
+            | 0x3200..=0x33FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA960..=0xA97F
+            | 0xAC00..=0xD7FF
+            | 0xF900..=0xFAFF
+            | 0xFE10..=0xFE1F
+            | 0xFE30..=0xFE6F
+            | 0xFF01..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x1F000..=0x1FAFF
+            | 0x20000..=0x3FFFF
+    )
+}
+
+/// Which characters stand upright in vertical text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Upright {
+    /// None (horizontal text, vert, vert270, mongolianVert).
+    None,
+    /// Ideographs, kana and the like (eaVert).
+    Cjk,
+    /// Every character, one under the other (wordArtVert).
+    All,
 }
 
 /// Size of superscript and subscript text relative to the run's size.
@@ -673,7 +1064,11 @@ fn shape_item(
     let (Some(&b0), Some(&b1)) = (byte_of.get(range.start), byte_of.get(range.end)) else { return };
     let features = shaping_features(cells.get(range.clone()).unwrap_or(&[]), styles, script);
     let params = ShapeParams { features: &features, rtl, script, language: lang };
-    let glyphs = deckcraft_fonts::shape_range(face, text, b0..b1, &params, |ch| if upper { ch.to_uppercase().next().unwrap_or(ch) } else { ch });
+    let sym = styles.get(first.style).and_then(|st| st.sym.as_deref());
+    let glyphs = deckcraft_fonts::shape_range(face, text, b0..b1, &params, |ch| {
+        let ch = if upper { caps_char(ch) } else { ch };
+        symbol_map_char(face, ch, sym).unwrap_or(ch)
+    });
     let upem = face.upem.max(1.0);
     let scale_of = |cell: &Cell| {
         let st = styles.get(cell.style);
@@ -694,7 +1089,7 @@ fn shape_item(
     for g in &glyphs {
         let Some(&h) = char_at_byte.get(&g.cluster) else { continue };
         let Some(cell) = cells.get_mut(h) else { continue };
-        if matches!(cell.ch, '\t' | '\u{b}' | '\n') {
+        if matches!(cell.ch, '\t'..='\u{b}') {
             continue;
         }
         let s = scale_of(cell);
@@ -755,6 +1150,223 @@ fn is_symbol_font(family: &str) -> bool {
     f.starts_with("wingdings") || f == "symbol" || f.starts_with("webdings") || f.starts_with("marlett")
 }
 
+/// Does `face` draw the symbol-font character `c` (a U+F0xx private-use code)? Either directly at
+/// the PUA, or, when the face has no private-use mapping (Apple's "Symbol" maps its glyphs to real
+/// Unicode), at the Adobe Symbol encoding's real character, or at the ASCII character itself when
+/// `c`'s code is plain printable ASCII (0x20–0x7E with no table entry).
+fn covers_symbol(face: &FontFace, c: char) -> bool {
+    symbol_font_draw(face, (c as u32) & 0xFF).is_some()
+}
+
+/// The character `ch` is drawn as when the item's face is the `a:sym` symbol font `sym`: a U+F0xx
+/// private-use code becomes the face's glyph — at the PUA, or at the real Unicode the Symbol font
+/// maps it to (Apple's "Symbol"). `None` when `ch` is not such a character or the face is not that
+/// font, so the run's other characters pass through unchanged.
+fn symbol_map_char(face: &FontFace, ch: char, sym: Option<&str>) -> Option<char> {
+    let code = ch as u32;
+    if !(0xF000..=0xF0FF).contains(&code) {
+        return None;
+    }
+    let sym = sym?;
+    if !is_symbol_font(sym) || !face.family.eq_ignore_ascii_case(sym) {
+        return None;
+    }
+    symbol_font_draw(face, code)
+}
+
+/// The real-Unicode character the Symbol font's code `code` (0x00–0xFF) maps to, in the Adobe
+/// Symbol encoding (Unicode, Inc.'s `MAPPINGS/VENDORS/ADOBE/symbol.txt`; Apple's Mac OS Symbol
+/// shares this layout, with a few alternative Unicode choices — see `symbol_unicode_alts`): the
+/// codes a document stores as U+F000 + code draw the same glyphs at these Unicode points. Apple's
+/// "Symbol" on macOS has no private-use mapping at all — it maps the glyphs to these real characters
+/// instead — so a document's U+F0xx symbol characters must be remapped to them there (PowerPoint
+/// does the same against whatever the installed Symbol font covers). Only the non-ASCII, non-CUS
+/// entries are listed: printable ASCII passes through as its own code, and the CUS (Corporate Use
+/// Subarea) fragment glyphs have no standard Unicode point.
+const fn symbol_unicode(code: u32) -> Option<u32> {
+    Some(match code {
+        // 0x20–0x7E: the few mathematical ones among the ASCII-range characters.
+        0x22 => 0x2200,
+        0x24 => 0x2203,
+        0x27 => 0x220B,
+        0x2A => 0x2217,
+        0x2D => 0x2212,
+        0x40 => 0x2245,
+        0x5C => 0x2234,
+        0x5E => 0x22A5,
+        0x7E => 0x223C,
+        // 0x41–0x5A: Greek uppercase.
+        0x41 => 0x0391,
+        0x42 => 0x0392,
+        0x43 => 0x03A7,
+        0x44 => 0x0394,
+        0x45 => 0x0395,
+        0x46 => 0x03A6,
+        0x47 => 0x0393,
+        0x48 => 0x0397,
+        0x49 => 0x0399,
+        0x4A => 0x03D1,
+        0x4B => 0x039A,
+        0x4C => 0x039B,
+        0x4D => 0x039C,
+        0x4E => 0x039D,
+        0x4F => 0x039F,
+        0x50 => 0x03A0,
+        0x51 => 0x0398,
+        0x52 => 0x03A1,
+        0x53 => 0x03A3,
+        0x54 => 0x03A4,
+        0x55 => 0x03A5,
+        0x56 => 0x03C2,
+        0x57 => 0x03A9,
+        0x58 => 0x039E,
+        0x59 => 0x03A8,
+        0x5A => 0x0396,
+        // 0x61–0x7A: Greek lowercase (0x6A is the phi symbol, 0x6D the mu).
+        0x61 => 0x03B1,
+        0x62 => 0x03B2,
+        0x63 => 0x03C7,
+        0x64 => 0x03B4,
+        0x65 => 0x03B5,
+        0x66 => 0x03C6,
+        0x67 => 0x03B3,
+        0x68 => 0x03B7,
+        0x69 => 0x03B9,
+        0x6A => 0x03D5,
+        0x6B => 0x03BA,
+        0x6C => 0x03BB,
+        0x6D => 0x03BC,
+        0x6E => 0x03BD,
+        0x6F => 0x03BF,
+        0x70 => 0x03C0,
+        0x71 => 0x03B8,
+        0x72 => 0x03C1,
+        0x73 => 0x03C3,
+        0x74 => 0x03C4,
+        0x75 => 0x03C5,
+        0x76 => 0x03D6,
+        0x77 => 0x03C9,
+        0x78 => 0x03BE,
+        0x79 => 0x03C8,
+        0x7A => 0x03B6,
+        // 0xA0–0xAF: euro, Greek upsilon with hook, primes, math, suits and arrows.
+        0xA0 => 0x20AC,
+        0xA1 => 0x03D2,
+        0xA2 => 0x2032,
+        0xA3 => 0x2264,
+        0xA4 => 0x2215,
+        0xA5 => 0x221E,
+        0xA6 => 0x0192,
+        0xA7 => 0x2663,
+        0xA8 => 0x2666,
+        0xA9 => 0x2665,
+        0xAA => 0x2660,
+        0xAB => 0x2194,
+        0xAC => 0x2190,
+        0xAD => 0x2191,
+        0xAE => 0x2192,
+        0xAF => 0x2193,
+        // 0xB0–0xBC: degree, plus-minus, double prime, math and ellipsis.
+        0xB0 => 0x00B0,
+        0xB1 => 0x00B1,
+        0xB2 => 0x2033,
+        0xB3 => 0x2265,
+        0xB4 => 0x00D7,
+        0xB5 => 0x221D,
+        0xB6 => 0x2202,
+        0xB7 => 0x2022,
+        0xB8 => 0x00F7,
+        0xB9 => 0x2260,
+        0xBA => 0x2261,
+        0xBB => 0x2248,
+        0xBC => 0x2026,
+        0xBF => 0x21B5,
+        // 0xC0–0xCF: letterlike symbols, set relations.
+        0xC0 => 0x2135,
+        0xC1 => 0x2111,
+        0xC2 => 0x211C,
+        0xC3 => 0x2118,
+        0xC4 => 0x2297,
+        0xC5 => 0x2295,
+        0xC6 => 0x2205,
+        0xC7 => 0x2229,
+        0xC8 => 0x222A,
+        0xC9 => 0x2283,
+        0xCA => 0x2287,
+        0xCB => 0x2284,
+        0xCC => 0x2282,
+        0xCD => 0x2286,
+        0xCE => 0x2208,
+        0xCF => 0x2209,
+        // 0xD0–0xDF: angle, nabla, product, radical, not, ands, ors, double arrows.
+        0xD0 => 0x2220,
+        0xD1 => 0x2207,
+        0xD5 => 0x220F,
+        0xD6 => 0x221A,
+        0xD7 => 0x22C5,
+        0xD8 => 0x00AC,
+        0xD9 => 0x2227,
+        0xDA => 0x2228,
+        0xDB => 0x21D4,
+        0xDC => 0x21D0,
+        0xDD => 0x21D1,
+        0xDE => 0x21D2,
+        0xDF => 0x21D3,
+        // 0xE0–0xF5: lozenge, angle brackets, summation, integral.
+        0xE0 => 0x25CA,
+        0xE1 => 0x2329,
+        0xE5 => 0x2211,
+        0xF1 => 0x232A,
+        0xF2 => 0x222B,
+        0xF3 => 0x2320,
+        0xF5 => 0x2321,
+        _ => return None,
+    })
+}
+
+/// Apple's Mac OS Symbol (which shares the Adobe layout) diverges from the Adobe table on a few
+/// codes: it maps the fraction slash to U+2044 and the angle brackets to U+3008/U+3009 instead of
+/// Adobe's U+2215/U+2329/U+232A. `symbol_font_draw` tries these alternatives after the Adobe
+/// mapping when the installed face doesn't cover the Adobe character. The additional Adobe aliases
+/// for 0x44/0x57/0x6D (U+2206/U+2126/U+00B5) are not Apple alternatives and are deliberately absent.
+const fn symbol_unicode_alts(code: u32) -> &'static [u32] {
+    match code {
+        0xA4 => &[0x2044],
+        0xE1 => &[0x3008],
+        0xF1 => &[0x3009],
+        _ => &[],
+    }
+}
+
+/// The character the symbol font draws the code `code` at, when the installed `face` is that font:
+/// its private-use code U+F000 + code, or, when the face has no private-use mapping (Apple's
+/// "Symbol" maps its glyphs to real Unicode), the Adobe Symbol encoding's real character (then its
+/// Apple alternative, then, for printable ASCII with no table entry — the `< = > ?` codes among
+/// them — the ASCII character itself) when the face covers it.
+fn symbol_font_draw(face: &FontFace, code: u32) -> Option<char> {
+    let code = code & 0xFF;
+    let pua = char::from_u32(0xF000 | code)?;
+    if face.covers(pua) {
+        return Some(pua);
+    }
+    // The table below is the Symbol font's encoding; Wingdings, Webdings and the like are not Symbol.
+    if !face.family.eq_ignore_ascii_case("symbol") {
+        return None;
+    }
+    if let Some(real) = symbol_unicode(code) {
+        return std::iter::once(real).chain(symbol_unicode_alts(code).iter().copied()).filter_map(char::from_u32).find(|c| face.covers(*c));
+    }
+    // 0x20–0x7E with no table entry draw the ASCII character itself (the Symbol font's glyphs for
+    // "< = > ?" etc. sit at their own ASCII codes, not at a remapped Unicode point).
+    if (0x20..=0x7E).contains(&code) {
+        let ascii = char::from_u32(code)?;
+        if face.covers(ascii) {
+            return Some(ascii);
+        }
+    }
+    None
+}
+
 /// The character to draw bullet `c` with the installed symbol font `face`, when `font` names a
 /// symbol font that `face` is (not a substitute) and it has the glyph.
 fn symbol_font_char(face: &FontFace, c: &str, font: Option<&str>) -> Option<char> {
@@ -763,14 +1375,16 @@ fn symbol_font_char(face: &FontFace, c: &str, font: Option<&str>) -> Option<char
         return None;
     }
     let first = c.chars().next()?;
-    let pua = char::from_u32(0xF000 | ((first as u32) & 0xFF))?;
-    if face.covers(pua) {
-        Some(pua)
-    } else if face.covers(first) {
-        Some(first)
-    } else {
-        None
+    let cp = first as u32;
+    // Only symbol-font codes (low byte, or the U+F000 + code private-use form) take the mapping.
+    // A bullet whose character is a plain Unicode codepoint (e.g. U+2022 •) draws its own glyph
+    // when the face covers it, never a low-byte remap to an unrelated Symbol code.
+    if (cp < 0x100 || (0xF000..=0xF0FF).contains(&cp))
+        && let Some(c) = symbol_font_draw(face, cp & 0xFF)
+    {
+        return Some(c);
     }
+    face.covers(first).then_some(first)
 }
 
 /// The character that draws `c`, a character of text set in the symbol font `font` (Wingdings,
@@ -787,7 +1401,8 @@ pub fn symbol_char(face: &FontFace, font: &str, c: char) -> Option<char> {
     Some(symbol_font_char(face, &s, Some(font)).unwrap_or_else(|| map_symbol_bullet(&s, Some(font)).chars().next().unwrap_or('•')))
 }
 
-fn map_symbol_bullet(c: &str, font: Option<&str>) -> String {
+/// The Unicode bullet for a symbol-font bullet character (Wingdings, Symbol), or the character.
+pub fn map_symbol_bullet(c: &str, font: Option<&str>) -> String {
     let f = font.unwrap_or("").to_ascii_lowercase();
     let first = c.chars().next().unwrap_or('•');
     if f.starts_with("webdings") {
@@ -883,31 +1498,50 @@ fn is_hangul(c: char) -> bool {
     matches!(c, '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}' | '\u{AC00}'..='\u{D7FF}')
 }
 
-/// Closing East Asian punctuation that may hang past the end of a line (`hangingPunct`).
+/// East Asian commas and full stops, the punctuation PowerPoint lets hang past the end of a line
+/// (`hangingPunct`). Closing brackets don't hang: "「。」" overflowing by its "」" moves to the next
+/// line whole.
 fn is_hanging_punct(c: char) -> bool {
+    matches!(c, '、' | '。' | '，' | '．' | '､' | '｡')
+}
+
+/// Small kana, the prolonged sound mark and iteration marks: PowerPoint keeps them off the start
+/// of a line (strict Japanese line breaking), where UAX #14's default allows a break before them.
+fn is_cj_nonstarter(c: char) -> bool {
     matches!(
         c,
-        '、' | '。'
-            | '，'
-            | '．'
-            | '：'
-            | '；'
-            | '！'
-            | '？'
-            | '）'
-            | '」'
-            | '』'
-            | '】'
-            | '〕'
-            | '〉'
-            | '》'
-            | '〙'
-            | '〛'
-            | '｝'
-            | '］'
-            | '｣'
-            | '､'
-            | '｡'
+        'ぁ' | 'ぃ'
+            | 'ぅ'
+            | 'ぇ'
+            | 'ぉ'
+            | 'っ'
+            | 'ゃ'
+            | 'ゅ'
+            | 'ょ'
+            | 'ゎ'
+            | 'ゕ'
+            | 'ゖ'
+            | 'ァ'
+            | 'ィ'
+            | 'ゥ'
+            | 'ェ'
+            | 'ォ'
+            | 'ッ'
+            | 'ャ'
+            | 'ュ'
+            | 'ョ'
+            | 'ヮ'
+            | 'ヵ'
+            | 'ヶ'
+            | 'ー'
+            | '々'
+            | '〻'
+            | 'ゝ'
+            | 'ゞ'
+            | 'ヽ'
+            | 'ヾ'
+            | '\u{31F0}'..='\u{31FF}'
+            | 'ｧ'..='ｰ'
     )
 }
 
@@ -938,7 +1572,12 @@ fn break_opportunities(text: &str, latin_break: bool) -> (Vec<bool>, Vec<bool>) 
     let chars: Vec<char> = text.chars().collect();
     for (i, w) in chars.windows(2).enumerate() {
         let (prev, next) = (w[0], w[1]);
-        let keep = if is_hangul(prev) && is_hangul(next) { false } else { latin_break || !matches!(prev, '/' | '\\') || next.is_whitespace() };
+        // PowerPoint never breaks after a zero-width space, nor before an em dash (only after it).
+        let keep = if (is_hangul(prev) && is_hangul(next)) || prev == '\u{200B}' || next == '\u{2014}' || is_cj_nonstarter(next) {
+            false
+        } else {
+            latin_break || !matches!(prev, '/' | '\\') || next.is_whitespace()
+        };
         if !keep
             && !mandatory.get(i + 1).copied().unwrap_or(false)
             && let Some(a) = allowed.get_mut(i + 1)
@@ -961,7 +1600,7 @@ fn break_lines(
     first_w: f64,
     rest_w: f64,
     wrap: bool,
-    tab_stops: &[f64],
+    tab_stops: &[Tab],
     default_tab: f64,
     x0_first: f64,
     x0_rest: f64,
@@ -990,7 +1629,11 @@ fn break_lines(
                 next = i + 1;
                 break;
             }
-            let adv = if c == '\t' { tab_advance(x0 + x, tab_stops, default_tab) } else { p.cells.get(i).map(|c| c.adv).unwrap_or(0.0) };
+            let adv = if c == '\t' {
+                tab_advance(x0 + x, tab_stops, default_tab, tab_segment(&p.cells, i))
+            } else {
+                p.cells.get(i).map(|c| c.adv).unwrap_or(0.0)
+            };
             let breakable = |j: usize| p.cells.get(j).is_none_or(|c| c.breakable(j));
             if i > start && allowed.get(i).copied().unwrap_or(false) && breakable(i) {
                 last_break = Some(i);
@@ -1000,6 +1643,15 @@ fn break_lines(
             if wrap && hang && x + adv > avail + 0.01 && x <= avail + 0.01 && is_hanging_punct(c) && i > start {
                 end = i + 1;
                 next = i + 1;
+                break;
+            }
+            // A tab that would run past the end moves to the next line (and to its first stop there).
+            if wrap && c == '\t' && x + adv > avail + 0.01 && i > start {
+                end = i;
+                next = i;
+                while end > start && p.cells.get(end - 1).is_some_and(|c| c.ch == ' ') {
+                    end -= 1;
+                }
                 break;
             }
             if wrap && x + adv > avail + 0.01 && !c.is_whitespace() && i > start {
@@ -1043,10 +1695,72 @@ fn break_lines(
     lines
 }
 
-fn tab_advance(x: f64, stops: &[f64], default_tab: f64) -> f64 {
+/// How a tab stop aligns the text after it (`a:tab/@algn`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TabAlign {
+    Left,
+    Center,
+    Right,
+    /// The first "." of the text sits at the stop (text without one ends there).
+    Decimal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tab {
+    pos: f64,
+    align: TabAlign,
+}
+
+fn tabs_of(props: &ParaProps) -> Vec<Tab> {
+    props
+        .tabs
+        .as_ref()
+        .map(|t| {
+            t.iter()
+                .map(|s| Tab {
+                    pos: s.pos,
+                    align: match s.align.as_str() {
+                        "ctr" => TabAlign::Center,
+                        "r" => TabAlign::Right,
+                        "dec" => TabAlign::Decimal,
+                        _ => TabAlign::Left,
+                    },
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Width of the text after the tab at cell `i` up to the next tab or line break, and the width of
+/// that text before its first ".".
+fn tab_segment(cells: &[Cell], i: usize) -> (f64, f64) {
+    let mut w = 0.0;
+    let mut dec = None;
+    for c in cells.iter().skip(i + 1) {
+        if matches!(c.ch, '\t'..='\u{b}') {
+            break;
+        }
+        if c.ch == '.' && dec.is_none() {
+            dec = Some(w);
+        }
+        w += c.adv;
+    }
+    (w, dec.unwrap_or(w))
+}
+
+/// Advance of a tab at `x` (from the start edge) to the next stop, placing the text after it
+/// (`seg`: its width, and its width before the decimal point) as the stop aligns it but never
+/// moving back, as PowerPoint does; past the last stop, to the next default stop.
+fn tab_advance(x: f64, stops: &[Tab], default_tab: f64, seg: (f64, f64)) -> f64 {
     for s in stops {
-        if *s > x + 0.5 {
-            return s - x;
+        if s.pos > x + 0.5 {
+            let to = s.pos - x;
+            return match s.align {
+                TabAlign::Left => to,
+                TabAlign::Right => (to - seg.0).max(0.0),
+                TabAlign::Center => (to - seg.0 / 2.0).max(0.0),
+                TabAlign::Decimal => (to - seg.1).max(0.0),
+            };
         }
     }
     let d = if default_tab > 1.0 { default_tab } else { 72.0 };
@@ -1054,20 +1768,50 @@ fn tab_advance(x: f64, stops: &[f64], default_tab: f64) -> f64 {
     (next - x).max(1.0)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times `layout_scaled` ran on this thread (tests count autofit's passes).
+    pub(crate) static LAYOUT_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Lay out a shape's text body.
 pub fn layout(ctx: &Ctx, shape: &Shape, body: &TextBody, opts: &Opts) -> TextLayout {
     let bp = resolve::body(ctx, shape);
     let autofit = bp.autofit.unwrap_or(AutoFit::None);
-    let mut l = layout_scaled(ctx, shape, body, &bp, opts, 1.0, 0.0);
+    // Shrink on overflow starts from the scale the file was saved with (`fontScale`,
+    // `lnSpcReduction`), which is what PowerPoint draws; editing the text resets it.
+    let (scale0, reduce0, no_saved_scale) = match (autofit, opts.no_shrink) {
+        (AutoFit::Shrink { font_scale, line_reduction }, false) => (
+            font_scale.filter(|s| s.is_finite()).map(|s| s.clamp(0.1, 1.0)).unwrap_or(1.0),
+            if line_reduction.is_finite() { line_reduction.clamp(0.0, 0.2) } else { 0.0 },
+            font_scale.is_none(),
+        ),
+        _ => (1.0, 0.0, false),
+    };
+    let mut l = layout_scaled(ctx, shape, body, &bp, opts, scale0, reduce0);
+    // A scale PowerPoint saved is drawn as it is: PowerPoint fits the text again only when it
+    // changes (and editing resets the saved scale), not when a file opens, even where our
+    // metrics would call it overflowing (trailing empty paragraphs, substituted fonts).
+    // A body whose file has no `fontScale` at all (`<a:normAutofit/>`) is the schema default
+    // 100 % and is drawn as it is too, not refitted on open (#724).
+    let saved = no_saved_scale || scale0 < 1.0 || reduce0 > 0.0;
     if let (AutoFit::Shrink { .. }, false) = (autofit, opts.no_shrink)
         && l.overflow
+        && !saved
     {
+        // Text that overflows even at the smallest scale gets that scale: every larger one
+        // overflows too, so searching would only lay it out a dozen more times (seconds for a
+        // body of tens of thousands of paragraphs, on every redraw of the slide).
+        let smallest = layout_scaled(ctx, shape, body, &bp, opts, 0.1, 0.2);
+        if smallest.overflow {
+            return smallest;
+        }
         // Binary search the largest scale that fits (steps like 90%, 80%… with line reduction).
-        let (mut lo, mut hi) = (0.1_f64, 1.0_f64);
-        let mut best = None;
+        let (mut lo, mut hi) = (0.1_f64, scale0);
+        let mut best = Some(smallest);
         for _ in 0..12 {
             let mid = (lo + hi) / 2.0;
-            let red: f64 = ((1.0 - mid) * 0.8_f64).min(0.2);
+            let red: f64 = ((1.0 - mid) * 0.8_f64).min(0.2).max(reduce0);
             let t = layout_scaled(ctx, shape, body, &bp, opts, mid, red);
             if t.overflow {
                 hi = mid;
@@ -1076,16 +1820,31 @@ pub fn layout(ctx: &Ctx, shape: &Shape, body: &TextBody, opts: &Opts) -> TextLay
                 best = Some(t);
             }
         }
-        l = best.unwrap_or_else(|| layout_scaled(ctx, shape, body, &bp, opts, 0.1, 0.2));
+        if let Some(b) = best {
+            l = b;
+        }
     }
     l
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts: &Opts, scale: f64, reduce: f64) -> TextLayout {
+    #[cfg(test)]
+    LAYOUT_PASSES.with(|n| n.set(n.get() + 1));
     let r = opts.rect;
     let vert = bp.vert.unwrap_or(TextDir::Horizontal);
+    // East Asian vertical text: CJK stands upright in text turned a quarter turn; stacked text
+    // stands every character upright, one under the other.
+    let upright_text = match vert {
+        TextDir::EaVertical => Upright::Cjk,
+        TextDir::Stacked | TextDir::StackedRtl => Upright::All,
+        _ => Upright::None,
+    };
+    // Mongolian vertical and stacked text: turned like vert, their lines run from left to right
+    // (as PowerPoint draws both).
+    let lines_ltr = matches!(vert, TextDir::MongolianVertical | TextDir::Stacked);
     let rotation = match vert {
-        TextDir::Vertical | TextDir::EaVertical | TextDir::Stacked => 90.0,
+        TextDir::Vertical | TextDir::EaVertical | TextDir::Stacked | TextDir::StackedRtl | TextDir::MongolianVertical => 90.0,
         TextDir::Vertical270 => 270.0,
         TextDir::Horizontal => 0.0,
     } + bp.rot.unwrap_or(0.0);
@@ -1114,6 +1873,9 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
     let mut numbering: Vec<u32> = vec![0; 9];
     let mut all_lines: Vec<(LineInfo, LinePlace, f64, Option<(String, f64, f64)>)> = vec![];
     let mut prev_after = 0.0;
+    // How far the last line's full pitch reaches past the text (exact spacing; see below).
+    let mut tail = 0.0;
+    let first_last = bp.space_first_last.unwrap_or(false);
     let mut shaped_paras: Vec<ParaShaped> = Vec::with_capacity(body.paragraphs.len());
     for (pi, para) in body.paragraphs.iter().enumerate() {
         let lvl = para.level.min(8) as usize;
@@ -1126,6 +1888,10 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                 *deeper = 0;
             }
             numbering.get(lvl).copied()
+        } else if matches!(pp.bullet, Some(Bullet::AutoNum { .. })) {
+            // Preview the next number without consuming it: empty paragraphs do not advance
+            // numbering in the saved document or affect later populated paragraphs.
+            numbering.get(lvl).map(|n| n.saturating_add(1))
         } else {
             if !para.is_empty() {
                 for n in numbering.iter_mut().skip(lvl) {
@@ -1134,7 +1900,7 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             }
             None
         };
-        shaped_paras.push(shape_para(ctx, shape, body, pi, scale, opts, number));
+        shaped_paras.push(shape_para(ctx, shape, body, pi, scale, opts, number, upright_text));
     }
     for (pi, p) in shaped_paras.iter().enumerate() {
         let props = &p.props;
@@ -1153,11 +1919,12 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             (margin + indent).max(0.0)
         };
         let rest_x = margin;
-        let tabs: Vec<f64> = props.tabs.as_ref().map(|t| t.iter().map(|s| s.pos).collect()).unwrap_or_default();
+        let tabs = tabs_of(props);
         let first_w = (col_w - first_x - mr).max(1.0);
         let rest_w = (col_w - rest_x - mr).max(1.0);
         let raw = break_lines(p, first_w, rest_w, wrap, &tabs, props.default_tab.unwrap_or(72.0), first_x, rest_x);
-        let before = if pi == 0 { 0.0 } else { spacing_pts(props.space_before, p.lead_size, reduce) };
+        // The first paragraph's space before counts only when the body says so.
+        let before = if pi == 0 && !first_last { 0.0 } else { spacing_pts(props.space_before, p.lead_size) };
         y += before.max(0.0) + prev_after;
         let first_line_idx = all_lines.len();
         for (li, rl) in raw.iter().enumerate() {
@@ -1166,27 +1933,48 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             for c in p.cells.get(rl.start..rl.end.max(rl.start)).unwrap_or(&[]) {
                 if let (Some(st), Some(face)) = (p.styles.get(c.style), p.faces.get(c.face)) {
                     let sz = st.size;
-                    let (a, d) = line_metrics(face, sz);
+                    // The run's own fonts set the line; a fallback face (emoji, a symbol or a
+                    // script the run's fonts lack) does not move the baseline in PowerPoint.
+                    let own = Arc::ptr_eq(face, &st.face)
+                        || [st.ea.as_deref(), st.cs.as_deref(), st.sym.as_deref()].into_iter().flatten().any(|f| face.family.eq_ignore_ascii_case(f));
+                    let (a, d) = line_metrics(if own { face } else { &st.face }, sz);
                     asc = asc.max(a);
                     desc = desc.max(d);
                     size = size.max(sz);
                 }
             }
             if size == 0.0 {
-                let (a, d) = line_metrics(&p.lead_face, p.lead_size);
+                // PowerPoint sizes an empty line by the mark that ends it: the `a:rPr` of the
+                // `a:br` that closes it, or `a:endParaRPr` for the paragraph's last line -- not
+                // by the paragraph's first run (#780). An empty *paragraph* already lands on
+                // `end_props` through `lead`, and keeps the same height here.
+                let brk = p.cells.get(rl.end).filter(|c| c.ch == '\u{b}').and_then(|c| p.styles.get(c.style));
+                let (face, sz) = match brk {
+                    Some(st) => (&st.face, st.size),
+                    None if rl.end >= p.cells.len() => (&p.end_face, p.end_size),
+                    // Anything else empty (a line of tabs alone) keeps the old measure.
+                    None => (&p.lead_face, p.lead_size),
+                };
+                let (a, d) = line_metrics(face, sz);
                 asc = a;
                 desc = d;
-                size = p.lead_size;
+                size = sz;
             }
             let natural = (asc + desc).max(size * 1.0);
             let lh = match props.line_spacing {
-                Some(Spacing::Pct(f)) => natural * f.max(0.0) * (1.0 - reduce),
+                // The reduction comes off the percentage (90 % less 20 % is 70 %), as PowerPoint
+                // applies `lnSpcReduction`.
+                Some(Spacing::Pct(f)) => natural * (f - reduce).max(f * 0.1).max(0.0),
                 Some(Spacing::Pts(v)) => v * (1.0 - reduce),
                 None => natural * (1.0 - reduce),
             };
             let ratio = if natural > 0.0 { lh / natural } else { 1.0 };
             let top = y;
-            let baseline = top + asc * ratio;
+            // Exact spacing (`spcPts`), as PowerPoint sets it: the baseline sits at 80 % of the
+            // line pitch, and the text ends at the last line's descent rather than a full pitch.
+            let exact = matches!(props.line_spacing, Some(Spacing::Pts(_)));
+            let baseline = if exact { top + lh * 0.8 } else { top + asc * ratio };
+            tail = if exact { (lh * 0.2 - desc).max(-lh) } else { 0.0 };
             y += lh;
             let x0 = if li == 0 { first_x } else { rest_x };
             let avail = (col_w - x0 - mr).max(0.0);
@@ -1195,8 +1983,16 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             // Logical advances; tabs measure from the start edge.
             let mut adv = Vec::with_capacity(n);
             let mut x = 0.0;
-            for c in line_cells {
-                let a = if c.ch == '\t' { tab_advance(x0 + x, &tabs, props.default_tab.unwrap_or(72.0)) } else { c.adv };
+            // A line that breaks at a soft hyphen ends with a visible hyphen.
+            let shy_end = li + 1 < raw.len() && line_cells.last().is_some_and(|c| c.ch == '\u{AD}');
+            for (k, c) in line_cells.iter().enumerate() {
+                let a = if shy_end && k + 1 == n {
+                    p.faces.get(c.face).zip(p.styles.get(c.style)).map(|(f, st)| measure_str(f, st.size, "-").0).unwrap_or(0.0)
+                } else if c.ch == '\t' {
+                    tab_advance(x0 + x, &tabs, props.default_tab.unwrap_or(72.0), tab_segment(&p.cells, rl.start + k))
+                } else {
+                    c.adv
+                };
                 adv.push(a);
                 x += a;
             }
@@ -1321,10 +2117,16 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             ));
         }
         out.para_lines.push((first_line_idx, raw.len()));
-        prev_after = spacing_pts(props.space_after, p.lead_size, reduce).max(0.0);
+        prev_after = spacing_pts(props.space_after, p.lead_size).max(0.0);
     }
-    let total = y;
+    // The text ends at the last line's descent under exact spacing; the last paragraph's space
+    // after counts only when the body says so.
+    let total = (y - tail).max(0.0) + if first_last { prev_after } else { 0.0 };
     out.content_height = total;
+    // Where column `c` starts: from the left, or from the right with `rtlCol` (PowerPoint puts the
+    // first column on the right).
+    let rtl_cols = bp.rtl_col.unwrap_or(false) && ncols > 1;
+    let col_x = |c: usize| (if rtl_cols { ncols.saturating_sub(1 + c) } else { c }) as f64 * (col_w + col_gap);
     // Columns: distribute lines by height.
     let col_h = if ncols > 1 { inner.height() } else { f64::INFINITY };
     let mut col = 0usize;
@@ -1340,20 +2142,35 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             li.top -= dy;
             li.baseline -= dy;
             li.bottom -= dy;
-            li.shift_x(col as f64 * (col_w + col_gap));
+        }
+        let cx = col_x(col);
+        if cx != 0.0 {
+            li.shift_x(cx);
         }
     }
     let used_h = if ncols > 1 { all_lines.iter().map(|(l, ..)| l.bottom).fold(0.0, f64::max) } else { total };
     out.overflow = used_h > inner.height() + 0.5 || (ncols > 1 && all_lines.last().is_some_and(|(l, ..)| l.bottom > inner.height() + 0.5));
     let anchor = bp.anchor.unwrap_or(Anchor::Top);
     let dy = match anchor {
-        Anchor::Top | Anchor::Justified | Anchor::Distributed => 0.0,
+        Anchor::Top => 0.0,
         Anchor::Middle => (inner.height() - used_h) / 2.0,
-        Anchor::Bottom => inner.height() - used_h,
+        // PowerPoint draws justified and distributed anchoring at the bottom.
+        Anchor::Bottom | Anchor::Justified | Anchor::Distributed => inner.height() - used_h,
     };
-    // anchorCtr: centre the block horizontally.
-    let dx = if bp.anchor_ctr.unwrap_or(false) { ((inner.width() - out.content_width) / 2.0).max(0.0) } else { 0.0 };
-    let ox = inner.x0 + dx;
+    // anchorCtr: centre the drawn text block on the box. Lines sit where their alignment put
+    // them, so the origin is set so the block's centre lands on the box's centre — a left-edge
+    // offset alone pushed right-aligned lines out of the box (#736). Empty lines carry no ink
+    // and stay out of the block. Overflowing content centres symmetrically past both edges.
+    // Not applied to vertical text (there the offset would run along the wrong axis) or
+    // multi-column bodies (centring unimplemented for them).
+    let centre_block = bp.anchor_ctr.unwrap_or(false) && ncols == 1 && matches!(vert, TextDir::Horizontal);
+    let ox = if centre_block && !all_lines.is_empty() {
+        let ink = all_lines.iter().filter(|(li, ..)| li.end > li.start);
+        let (bmin, bmax) = ink.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), (li, ..)| (a.min(li.extent.0), b.max(li.extent.1)));
+        if bmax >= bmin { inner.x0 + inner.width() / 2.0 - (bmin + bmax) / 2.0 } else { inner.x0 }
+    } else {
+        inner.x0
+    };
     let oy = inner.y0 + dy;
     // Emit runs, in visual order.
     for (line, place, _, bullet) in all_lines.iter_mut() {
@@ -1361,19 +2178,23 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
         line.baseline += oy;
         line.bottom += oy;
         line.shift_x(ox);
+        if lines_ltr {
+            // The line's place mirrored across the box: the first line ends up on the left.
+            let d = inner.y0 + inner.y1 - line.top - line.bottom;
+            line.top += d;
+            line.baseline += d;
+            line.bottom += d;
+        }
         let Some(p) = shaped_paras.get(line.para) else { continue };
-        if let Some((s, bx, by)) = bullet.take()
+        if let Some((s, bx, _)) = bullet.take()
             && let Some((_, st)) = p.bullet.as_ref()
         {
             let (_, g) = measure_str(&st.face, st.size, &s);
-            out.runs.push(GlyphRun {
+            let run = GlyphRun {
                 face: st.face.clone(),
                 size: st.size,
                 color: st.color,
-                glyphs: g
-                    .into_iter()
-                    .map(|(gid, x)| (gid, ox + bx + x + if line.column > 0 { line.column as f64 * (col_w + col_gap) } else { 0.0 }, by + oy))
-                    .collect(),
+                glyphs: g.into_iter().map(|(gid, x)| (gid, ox + bx + x + col_x(line.column), line.baseline)).collect(),
                 cells: vec![],
                 fake_bold: false,
                 fake_italic: false,
@@ -1384,11 +2205,17 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                 alpha: st.alpha,
                 gradient: None,
                 effects: None,
-            });
+                upright: false,
+            };
+            if body.paragraphs.get(line.para).is_some_and(|p| p.is_empty()) && opts.prompt_color.is_none() {
+                out.empty_bullets.push(run);
+            } else {
+                out.runs.push(run);
+            }
         }
         // Group visually consecutive cells by (style, face).
         let mut cur: Option<GlyphRun> = None;
-        let mut cur_key = (usize::MAX, usize::MAX);
+        let mut cur_key = (usize::MAX, usize::MAX, false, false);
         for &k in &place.order {
             let ci = line.start + k;
             let Some(cell) = p.cells.get(ci) else { continue };
@@ -1397,7 +2224,8 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             let base_y = line.baseline - st.baseline * st.size;
             let size = if st.baseline != 0.0 { st.size * SUB_SUPER } else { st.size };
             let size = if st.caps == Caps::Small && cell.ch.is_lowercase() { size * 0.8 } else { size };
-            let key = (cell.style, cell.face);
+            // Small capitals are drawn smaller than the capitals beside them: a run of their own.
+            let key = (cell.style, cell.face, st.caps == Caps::Small && cell.ch.is_lowercase(), cell.upright);
             if key != cur_key {
                 if let Some(r) = cur.take() {
                     out.runs.push(r);
@@ -1418,12 +2246,19 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                     alpha: st.alpha,
                     gradient: st.gradient.clone(),
                     effects: st.effects,
+                    upright: cell.upright,
                 });
                 cur_key = key;
             }
             if let Some(r) = cur.as_mut() {
                 r.chars = (r.chars.0.min(ci), r.chars.1.max(ci + 1));
-                if cell.head == ci && !cell.glyphs.is_empty() {
+                if cell.ch == '\u{AD}' && cx1 - cx > 0.01 {
+                    // The soft hyphen a line breaks at is drawn as a hyphen.
+                    if let Some(f) = p.faces.get(cell.face) {
+                        r.glyphs.push((f.glyph_for('-'), cx, base_y));
+                        r.cells.push((ci, cell.ch));
+                    }
+                } else if cell.head == ci && !cell.glyphs.is_empty() {
                     // The cluster's glyphs start at its leftmost cell; kashida (right-to-left
                     // only) fills the gap on the cluster's left with tatweel glyphs.
                     let cells_of =
@@ -1456,20 +2291,49 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                 continue;
             }
             if let Some(hl) = st.highlight {
-                out.decos.push(Deco { rect: Rect::new(cx, line.top, cx1, line.bottom), color: hl, behind: true, para: line.para });
+                out.decos.push(Deco {
+                    rect: Rect::new(cx, line.top, cx1, line.bottom),
+                    color: hl,
+                    behind: true,
+                    para: line.para,
+                    line: DecoLine::Solid,
+                });
             }
             if !cell.ch.is_whitespace() || st.underline.is_some() {
-                if let Some(uc) = st.underline {
-                    let t = (st.size * 0.06).max(0.5);
-                    let uy = line.baseline + st.size * 0.12;
-                    out.decos.push(Deco { rect: Rect::new(cx, uy, cx1, uy + t), color: uc, behind: false, para: line.para });
+                if let Some((uc, u)) = st.underline {
+                    // At the underline position and thickness of the run's own font.
+                    let k = st.size / st.face.upem.max(1.0);
+                    let (p, t) = (st.face.underline.0 * k, (st.face.underline.1 * k).max(0.5));
+                    for (y0, y1, kind) in u.boxes(p, t) {
+                        out.decos.push(Deco {
+                            rect: Rect::new(cx, line.baseline + y0, cx1, line.baseline + y1),
+                            color: uc,
+                            behind: false,
+                            para: line.para,
+                            line: kind,
+                        });
+                    }
                 }
                 if let Some(sk) = st.strike {
-                    let t = (st.size * 0.05).max(0.5);
-                    let sy = line.baseline - st.size * 0.3;
-                    out.decos.push(Deco { rect: Rect::new(cx, sy, cx1, sy + t), color: st.color, behind: false, para: line.para });
+                    // At the strikeout position and thickness of the run's own font.
+                    let k = st.size / st.face.upem.max(1.0);
+                    let t = (st.face.strikeout.1 * k).max(0.5);
+                    let sy = line.baseline - st.face.strikeout.0 * k;
+                    out.decos.push(Deco {
+                        rect: Rect::new(cx, sy, cx1, sy + t),
+                        color: st.color,
+                        behind: false,
+                        para: line.para,
+                        line: DecoLine::Solid,
+                    });
                     if sk == Strike::Double {
-                        out.decos.push(Deco { rect: Rect::new(cx, sy - t * 2.0, cx1, sy - t), color: st.color, behind: false, para: line.para });
+                        out.decos.push(Deco {
+                            rect: Rect::new(cx, sy - t * 2.0, cx1, sy - t),
+                            color: st.color,
+                            behind: false,
+                            para: line.para,
+                            line: DecoLine::Solid,
+                        });
                     }
                 }
             }
@@ -1498,13 +2362,15 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
 fn merge_decos(v: Vec<Deco>) -> Vec<Deco> {
     let mut out: Vec<Deco> = Vec::with_capacity(v.len());
     for d in v {
-        if let Some(last) = out.last_mut()
-            && last.color == d.color
-            && last.behind == d.behind
-            && (last.rect.y0 - d.rect.y0).abs() < 0.01
-            && (last.rect.y1 - d.rect.y1).abs() < 0.01
-            && (last.rect.x1 - d.rect.x0).abs() < 0.5
-        {
+        // Lines drawn together (a double underline, a strikethrough) interleave: look a few back.
+        if let Some(last) = out.iter_mut().rev().take(4).find(|last| {
+            last.color == d.color
+                && last.behind == d.behind
+                && last.line == d.line
+                && (last.rect.y0 - d.rect.y0).abs() < 0.01
+                && (last.rect.y1 - d.rect.y1).abs() < 0.01
+                && (last.rect.x1 - d.rect.x0).abs() < 0.5
+        }) {
             last.rect.x1 = d.rect.x1;
             continue;
         }
