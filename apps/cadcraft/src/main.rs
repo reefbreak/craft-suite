@@ -22,6 +22,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod spacemouse;
+mod system_animations;
 mod workspace;
 
 use cadcraft_engine::Session;
@@ -32,6 +33,8 @@ struct App {
     spacemouse: spacemouse::SpaceMouse,
     /// The desktop's light/dark choice where winit reports none (Linux, the BSDs).
     desktop_theme: desktop_theme::DesktopTheme,
+    /// Whether the OS shows animations, for the System choice of View ▸ Accessibility ▸ Animation Effects.
+    system_animations: system_animations::SystemAnimations,
     workspace: workspace::Workspace,
     workspace_error: Option<String>,
     #[cfg(target_os = "macos")]
@@ -62,36 +65,47 @@ fn follow_desktop(raw: &mut egui::RawInput, desktop: Option<egui::Theme>) {
 }
 
 impl eframe::App for App {
+    /// eframe logic callback: syncs the OS animation setting and runs `CadApp::logic`; when the pass index is 0 (the first pass or a hidden tick) it also installs/polls the macOS native menu, polls the spacemouse and persists the workspace; a quit request closes the viewport.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        #[cfg(target_os = "macos")]
-        {
-            if self.native_menu.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
-                self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad));
-            }
-            if let Some(m) = &mut self.native_menu {
-                m.poll(&mut self.cad, ctx);
-            }
-        }
+        self.cad.system_animations = self.system_animations.current();
+        // Consume control/open/screenshot queues and time-based autosave, including hidden ticks.
         self.cad.logic(ctx);
-        self.spacemouse.poll(&mut self.cad, ctx);
-        self.persist_workspace(false);
+        // Host frame work runs here, once per frame, and so also on a hidden logic-only tick (which
+        // never reaches `App::ui`): native menus stay current, the spacemouse still navigates and a
+        // workspace changed while hidden is persisted. `current_pass_index()` is zero on the first
+        // pass and on every hidden tick, and non-zero on later passes of a multi-pass frame.
+        if ctx.current_pass_index() == 0 {
+            #[cfg(target_os = "macos")]
+            {
+                if self.native_menu.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
+                    self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad, ctx));
+                }
+                if let Some(m) = &mut self.native_menu {
+                    m.poll(&mut self.cad, ctx);
+                }
+            }
+            self.spacemouse.poll(&mut self.cad, ctx);
+            // After `cad.logic`, so a control command's workspace change is saved in the same frame.
+            self.persist_workspace(false);
+        }
         if std::mem::take(&mut self.cad.quit_requested) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
+    /// Apply the desktop-theme fallback, forward raw input to `CadApp`, and capture Tab at the command line.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         follow_desktop(raw, self.desktop_theme.current());
-        self.cad.raw_input_hook(raw);
+        self.cad.raw_input_hook(ctx, raw);
         cadcraft_ui_egui::cmdline::capture_tab(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.cad.ui(ui);
-        self.persist_workspace(false);
     }
     /// A normal exit: the workspace is saved, and this run's autosave files are not needed (a
     /// crash leaves them for recovery).
     fn on_exit(&mut self) {
         self.persist_workspace(true);
+        self.cad.cancel_screenshots();
         self.cad.shutdown_autosave();
     }
     /// Preferences (the interface theme) survive restarts; window and egui state are not kept.
@@ -115,6 +129,11 @@ pub fn install_io() {
     cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
         cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
+    // AutoLISP's entget, entmake and entmod see entities as DXF groups.
+    cadcraft_engine::cmd::file::set_entity_codec(cadcraft_engine::cmd::file::EntityCodec {
+        groups: cadcraft_io::entity_groups,
+        entity: cadcraft_io::entity_from_groups,
+    });
 }
 
 fn services() -> Services {
@@ -134,6 +153,13 @@ fn services() -> Services {
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        // APPLOAD: AutoLISP routines only, starting where the last one was loaded from.
+        pick_lisp: Some(Box::new(|dir: &str| {
+            let dialog = rfd::FileDialog::new().add_filter(i18n::t("AutoLISP (LSP)"), &["lsp"]).add_filter(i18n::t("All files"), &["*"]);
+            let dialog = if dir.is_empty() { dialog } else { dialog.set_directory(dir) };
+            dialog.pick_file().map(|p| p.to_string_lossy().to_string())
+        })),
+        no_file_system: false,
     }
 }
 
@@ -175,6 +201,9 @@ fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<s
 
 const APP_ID: &str = "ai.storyteller.cadcraft";
 
+/// Stencil bits of the window's render pass (see `NativeOptions::stencil_buffer`).
+const STENCIL_BITS: u8 = 8;
+
 #[cfg(target_os = "macos")]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/cadcraft-macos-512.png");
 #[cfg(not(target_os = "macos"))]
@@ -200,9 +229,32 @@ fn control_port_from(source: &str, value: Option<String>) -> Option<u16> {
     port
 }
 
+/// `--control` followed by `value`: a bare `--control` (last argument) keeps the port already
+/// read from `CADCRAFT_CONTROL_PORT` (`current`) instead of turning the control channel off.
+fn control_flag(current: Option<u16>, value: Option<String>) -> Option<u16> {
+    if value.is_some() {
+        return control_port_from("--control", value);
+    }
+    match current {
+        Some(port) => log::warn!("--control: no port given; using CADCRAFT_CONTROL_PORT ({port})"),
+        None => log::warn!("--control: no port given; the control channel is off"),
+    }
+    current
+}
+
+/// Parse CLI options (`--control`, `--sample`, files, `--version`), install logging and I/O hooks, build the services and app, and run eframe.
 fn main() -> eframe::Result {
     // First, so every start-up record is captured; see `logging`.
     let logger = logging::install();
+    // The update helper relaunches this binary after a self-update; it runs and exits here.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(done) = craft_update::self_update::finish(&craft_update::suite::CADCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        if let Err(e) = done {
+            eprintln!("CADCraft update helper failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
     let mut control_port =
         control_port_from("CADCRAFT_CONTROL_PORT", std::env::var_os("CADCRAFT_CONTROL_PORT").map(|p| p.to_string_lossy().into_owned()));
@@ -211,7 +263,7 @@ fn main() -> eframe::Result {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--control" => control_port = control_port_from("--control", args.next()),
+            "--control" => control_port = control_flag(control_port, args.next()),
             "--sample" => sample = true,
             "--version" | "-V" => {
                 println!("{}", version_string());
@@ -248,6 +300,11 @@ fn main() -> eframe::Result {
             .with_title_shown(false)
             .with_app_id(APP_ID),
         persist_window: false,
+        // CADCraft installs its own capped font chain (`theme::install_fonts`); never run
+        // system-font discovery as a hidden fallback.
+        system_font_fallback: false,
+        // A stencil buffer clips the contents of clipped layout viewports on the GPU.
+        stencil_buffer: STENCIL_BITS,
         ..Default::default()
     };
     if let Some(icon) = app_icon() {
@@ -304,13 +361,21 @@ fn main() -> eframe::Result {
             // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
             if let Some(dir) = config_dir() {
                 app.enable_autosave(&dir.join("autosave"));
+                app.enable_update_check();
+                // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
+                // folder is made so it is there to put them in.
+                let support = dir.join("support");
+                if let Err(e) = std::fs::create_dir_all(&support) {
+                    log::warn!("no LISP support folder {}: {e}", support.display());
+                }
+                app.session.set_lisp_support_dir(Some(support));
             }
             app.integrated_titlebar = cfg!(target_os = "macos");
             if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
                 app.frame_cap = Some(cadcraft_ui_egui::gpu::FrameCap::new(240));
             }
             if let Some(rs) = &cc.wgpu_render_state {
-                app.set_wgpu(rs);
+                app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
             }
             if let Some(port) = control_port {
                 let rx = control_server::start(port, cc.egui_ctx.clone());
@@ -323,12 +388,17 @@ fn main() -> eframe::Result {
                 app.open_path(f);
             }
             if app.session.docs.is_empty() {
-                app.session.new_drawing(false);
+                // In the units the profile asks for (MEASUREINIT, restored above).
+                let metric = app.session.settings.measureinit;
+                app.session.new_drawing(metric);
             }
             let ctx = cc.egui_ctx.clone();
             let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            let system_animations = system_animations::SystemAnimations::start(move || ctx.request_repaint());
             Ok(Box::new(App {
                 desktop_theme,
+                system_animations,
                 cad: app,
                 spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
                 workspace,
@@ -342,7 +412,7 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir_from, control_port_from, filters_for_save, follow_desktop};
+    use super::{config_dir_from, control_flag, control_port_from, filters_for_save, follow_desktop};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -374,6 +444,16 @@ mod tests {
         for bad in ["", "abc", "-1", "65536", "99999999999999999999", "\u{0}"] {
             assert_eq!(control_port_from("--control", Some(bad.into())), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn control_without_a_port_keeps_the_environment_port() {
+        // `CADCRAFT_CONTROL_PORT=47321 cadcraft --control` (#844)
+        assert_eq!(control_flag(Some(47321), None), Some(47321));
+        assert_eq!(control_flag(None, None), None);
+        // A port given on the command line still wins over the variable.
+        assert_eq!(control_flag(Some(47321), Some("7979".into())), Some(7979));
+        assert_eq!(control_flag(Some(47321), Some("abc".into())), None);
     }
 
     #[test]

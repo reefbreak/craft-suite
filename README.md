@@ -7,14 +7,18 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.cadcraft.png" width="128" height="128" alt="CADCraft icon: a drafting set square and compass arc on a blue grid tile">
+</p>
+
 <h1 align="center">CADCraft</h1>
 
 <p align="center">
-  <b>Computer-aided design and drafting; an open-source, clean-room reimplementation of Autodesk AutoCAD, rebuilt in pure Rust.</b>
+  <b>Computer-aided design and drafting; an open-source, modern 2D and 3D CAD application, built in pure Rust.</b>
 </p>
 
 <p align="center">
-  A fast, open-source take on the AutoCAD workflow: the command line, object snaps, layers,
+  A fast, open-source CAD workflow: the command line, object snaps, layers,
   dimensions, hatches, blocks and DXF drawings you already know. It runs natively on macOS,
   Windows, Linux and FreeBSD, and in the browser via WebAssembly.<br>
   <i>By the ArtCraft team.</i>
@@ -26,6 +30,9 @@
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-0b6f88?style=flat-square">
   <img alt="Agent-drivable over MCP" src="https://img.shields.io/badge/agents-MCP-14a3c7?style=flat-square">
   <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-f07a3a?style=flat-square">
+  <br>
+  <a href="https://sonarcloud.io/project/overview?id=storytold_cadcraft"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/cadcraft?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
 
 <p align="center">
@@ -111,13 +118,12 @@ numbers):
 | Layouts & plotting | Paper-space layouts, viewports (scale, lock, per-viewport layer freeze), MSPACE/PSPACE through viewports, page setups, PLOT and EXPORTPDF |
 | Parametric | Geometric and dimensional constraints, AUTOCONSTRAIN, PARAMETERS with expressions, conflict detection; constraints re-solve after every edit |
 | Grips | Hot grips with Space to cycle Stretch, Move, Rotate, Scale and Mirror |
-| Interface languages | English, Ukrainian (Українська), Brazilian Portuguese (Português (Brasil)), German (Deutsch), Spanish (Español), Czech (Čeština), Russian (Русский), French (Français) and Simplified Chinese (简体中文, with an installed CJK font), live switching and a remembered Auto/system-language choice; [details](docs/localization.md) |
+| Interface languages | English, Ukrainian (Українська), Brazilian Portuguese (Português (Brasil)), German (Deutsch), Spanish (Español), Czech (Čeština), Russian (Русский), French (Français), Simplified Chinese (简体中文, with an installed CJK font), Italian (Italiano), Korean (한국어, with an installed Hangul font), Swedish (Svenska), Arabic (العربية, with an installed Arabic font), Hungarian (Magyar) and Turkish (Türkçe), live switching and a remembered Auto/system-language choice; [details](docs/localization.md) |
 | Automation | MCP server, JSON control channel, `cadcraft-cli` (info, convert, run, commands, mcp) |
 
 ## Quick start
 
-Desktop and web UI builds require Rust 1.95 or later. The core workspace's declared minimum
-remains Rust 1.90.
+CADCraft requires Rust 1.95 or later.
 
 ```sh
 git clone https://github.com/storytold/cadcraft
@@ -134,7 +140,7 @@ offset 0.25                     then pick the circle and a side
 zoom e                          zoom to extents
 ```
 
-The web build: `cd apps/cadcraft-web && trunk serve` (needs [trunk](https://trunkrs.dev)).
+The web build: `cd apps/cadcraft-web && trunk serve` (needs [trunk](https://github.com/trunk-rs/trunk)).
 
 ### Fonts
 
@@ -212,6 +218,10 @@ cadcraft-cli convert drawing.dxf drawing.svg
 cadcraft-cli convert drawing.dwg detail.png --window 0,0,20000,15000
 cadcraft-cli run drawing.dwg --cmd 'zoom {"mode":"window","p1":[0,0],"p2":[20000,15000]}' --export detail.png
 cadcraft-cli run drawing.dwg --cmd 'select {"window":[[0,0],[20000,15000]]}' --cmd 'zoom {"mode":"object"}' --export sel.png
+
+# Act on what an earlier --cmd made: {last} is the last handle it returned.
+cadcraft-cli run --metric --cmd 'layout.set {"name":"Layout1"}' \
+  --cmd 'mview {"p1":[20,20],"p2":[200,150]}' --cmd 'viewport.set {"handle":"{last}","scale":1}'
 ```
 
 How image exports (PNG 2400×1600, SVG, PDF) are framed: `convert` fits the model-space extents.
@@ -224,6 +234,9 @@ MCP tools include `command_line` (type at the prompt), `execute` (any command wi
 `inspect_drawing`, `query_entities`, `render` (returns a PNG) and, when connected to the app,
 `screenshot` and `ui_click`. The desktop app's JSON control channel is documented in
 [docs/control-protocol.md](docs/control-protocol.md).
+
+To run LISP routines, scripts and alias files, or to drive CADCraft from your own programs, see
+[docs/customization.md](docs/customization.md).
 
 ## Architecture
 
@@ -252,7 +265,24 @@ have accessible labels and visible keyboard focus. Property controls remain appl
 
 ## Accessibility
 
+### System cursor
+
 Over the drawing area CADCraft hides the system cursor and draws its own crosshair. Tools that follow the system cursor (Windows Magnifier set to follow or centre the mouse pointer, other screen magnifiers, screen recorders, remote desktops) lose track of it there. Turn on **View ▸ Accessibility ▸ Show System Cursor** to keep a small system crosshair visible at the centre of the drawn one, or start CADCraft with the environment variable `CADCRAFT_SYSTEM_CURSOR=1` (on Windows, set it once with `setx CADCRAFT_SYSTEM_CURSOR 1` and start CADCraft again). Agents can switch it with the control channel: `ui.set {"systemCursor": true}`.
+
+### Animation effects
+
+CADCraft follows the operating system's animation setting. When the system is set to show no animations, dialogs, menus and tooltips appear at once instead of fading in, collapsing sections and scroll bars change at once, and the mouse wheel scrolls lists a whole step at a time instead of gliding. Zooming the drawing with the wheel always moves a whole step; with Ctrl held (a touchpad pinch, on Windows) it glides to the new zoom only while animation effects show.
+
+| System | Where the setting is |
+|---|---|
+| Windows | Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects |
+| macOS | System Settings ▸ Accessibility ▸ Reduce motion |
+| Linux, BSD | the desktop's reduced-motion (or animations) setting, read through the XDG Desktop Portal |
+| Web | the browser's `prefers-reduced-motion` |
+
+A change to the system setting is picked up while CADCraft runs, within a few seconds. To choose for CADCraft alone, use **View ▸ Accessibility ▸ Animation Effects**: **Use System Setting** (the default), **On** or **Off**. Options ▸ Display has the same choice. Agents can set it with the control channel: `ui.set {"animations": "off"}` (`"system"`, `"on"` or `"off"`), and `ui.inspect` reports whether animations show (`animations`).
+
+Drafting feedback is not an animation effect and stays as it is: rubber bands and previews, snap markers, the pause that acquires an object snap tracking point, the text cursor's blink, the spinner shown while a drawing opens, and pan and zoom, which follow the pointer and the wheel directly.
 
 ## Roadmap
 
@@ -261,6 +291,14 @@ See [ROADMAP.md](ROADMAP.md) for the stage, measured parity and the estimate of 
 ## Downloads
 
 **Download CADCraft** from GitHub: the [latest release](https://github.com/storytold/cadcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/cadcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
+
+> [!WARNING]
+> Download official CADCraft builds from the [storytold/cadcraft releases](https://github.com/storytold/cadcraft/releases). Verify that the repository owner is `storytold`. Before you run a download, check that its checksum matches the line for that file in the release's `SHA256SUMS.txt`:
+>
+> ```sh
+> shasum -a 256 cadcraft-<ver>-macos-universal.dmg     # macOS (on Linux: sha256sum FILE)
+> Get-FileHash .\cadcraft-<ver>-windows-x64.msi        # Windows PowerShell
+> ```
 
 ### Windows
 
@@ -376,8 +414,6 @@ The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are tradem
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
 part of this repository and CADCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
 Forks and modified versions must remove them.
-
-<sub>Autodesk, AutoCAD and DWG are trademarks or registered trademarks of Autodesk, Inc. in the United States and/or other countries. CADCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Autodesk, Inc.; these names are used only to describe the workflows and file formats it is compatible with.</sub>
 
 <p align="center">
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
