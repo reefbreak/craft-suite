@@ -8,6 +8,11 @@ use crate::CadApp;
 /// The top-level menus, in order.
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Insert", "Format", "Tools", "Draw", "Dimension", "Modify", "Window", "Help"];
 
+/// File ▸ Open Recent: one `ui.recent.<n>` item per recent file, then Clear Recent Files.
+pub const OPEN_RECENT: &str = "Open Recent";
+const RECENT_ITEM: &str = "ui.recent.";
+const RECENT_CLEAR: &str = "ui.recent.clear";
+
 /// UI-only commands: (id, label, menu path, shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.spacemouse", "3D Mouse...", &["Tools", "3D Mouse..."], None),
@@ -22,8 +27,13 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
     ("ui.panel.properties", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
-    ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
+    ("ui.toggle.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
+    ("ui.panel.quickcalc", "QuickCalc", &[], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
+    ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
+    ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
+    ("ui.animations.off", "Off", &["View", "Accessibility", "Animation Effects", "Off"], None),
+    ("ui.animations", "Animation Effects", &[], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
     ("ui.toggle.statusbar", "Status Bar", &["Window", "Status Bar"], None),
@@ -53,6 +63,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.qselect", "Quick Select...", &[], None),
     ("ui.dialog.parameters", "Parameters Manager", &["Window", "Parameters Manager"], None),
     ("ui.dialog.dsettings", "Drafting Settings...", &[], None),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("ui.updates.check", "Check for Updates…", &["Help", "Check for Updates…"], None),
     ("ui.dialog.about", "About CADCraft", &["Help", "About CADCraft"], None),
     ("ui.dialog.commands", "Command Reference", &["Help", "CADCraft Help"], Some("F1")),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
@@ -80,6 +92,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     if let Some(r) = crate::xrefs::route(app, id, params) {
         return Some(r);
     }
+    if let Some(r) = crate::bedit::route(app, id, params) {
+        return Some(r);
+    }
     if let Some(r) = crate::managers::route(app, id, params) {
         return Some(r);
     }
@@ -90,7 +105,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
         return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
     }
-    // QUICKCALC typed or from a menu opens the palette; with parameters it is CAL.
+    if id == "ui.toggle.quickcalc" {
+        return Some(crate::palettes::quickcalc::toggle(app));
+    }
+    // Explicit opens remain idempotent; typed QUICKCALC with JSON parameters uses the engine's CAL alias.
     if id == "ui.panel.quickcalc" || (matches!(id, "quickcalc" | "qc") && params.is_null()) {
         return Some(crate::palettes::quickcalc::open(app));
     }
@@ -108,6 +126,15 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     // never open a picker.
     let no_path =
         if id.starts_with("ui.") { params.is_null() || (params.get("path").is_none() && params.get("data").is_none()) } else { params.is_null() };
+    if id == RECENT_CLEAR {
+        app.ui.recent_files.clear();
+        return Some(Ok(Value::Null));
+    }
+    if let Some(i) = id.strip_prefix(RECENT_ITEM).and_then(|n| n.parse::<usize>().ok()) {
+        let Some(path) = app.ui.recent_files.get(i).cloned() else { return Some(Err(format!("no recent file {i}"))) };
+        app.open_path(&path);
+        return Some(Ok(Value::Null));
+    }
     let r = match id {
         "ui.language" => {
             let Some(preference) = params.get("lang").and_then(Value::as_str).and_then(crate::i18n::Preference::parse) else {
@@ -116,9 +143,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.interface_language = preference;
             let shown = app.language();
             if shown != preference.resolve(&app.system_languages) {
-                app.set_status(
-                    "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese.",
-                );
+                app.set_status(if preference.resolve(&app.system_languages) == "ko" {
+                    "No font covers the Korean interface, so it stays in English. Install a Hangul font (Malgun Gothic or Nanum Gothic), or build with a Hang/Kore craft-fonts face."
+                } else {
+                    "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese."
+                });
             }
             Ok(json!({"interfaceLanguage": preference.code(), "shown": shown}))
         }
@@ -127,6 +156,29 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             if let Some(p) = picked {
                 app.open_path(&p);
             }
+            Ok(Value::Null)
+        }
+        // APPLOAD typed or chosen from a menu: the `.lsp` file picker, starting where the last
+        // one came from. JSON calls carry `path` and never open one. A picked file is loaded as a
+        // typed name is, through the interactive command, so a routine it starts that asks for a
+        // point waits for it; on the web (no file system) it says to drop the file instead.
+        "appload" | "ap" if params.is_null() => {
+            if app.services.no_file_system {
+                let hint = "APPLOAD: there is no file system here; drop a .lsp file on the window to load it";
+                app.session.echo(hint.to_string());
+                app.set_status(hint);
+                return Some(Ok(Value::Null));
+            }
+            let pick = app.services.pick_lisp.as_ref()?;
+            let dir = app.ui.last_lisp_dir.clone().unwrap_or_default();
+            let Some(path) = pick(&dir) else { return Some(Ok(Value::Null)) };
+            if let Some(dir) = std::path::Path::new(&path).parent().and_then(|p| p.to_str()).filter(|d| !d.is_empty()) {
+                app.ui.last_lisp_dir = Some(dir.to_string());
+            }
+            if let Err(e) = app.session.start("appload") {
+                return Some(Err(e.to_string()));
+            }
+            app.cmdline(&path);
             Ok(Value::Null)
         }
         // Pick a template (.dwt or .dxf) and start a new drawing from it.
@@ -235,6 +287,18 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             },
             None => Ok(theme_json(app)),
         },
+        "ui.animations.system" | "ui.animations.on" | "ui.animations.off" => {
+            let pref = crate::animation::AnimationPref::parse(id.trim_start_matches("ui.animations.")).unwrap_or_default();
+            Ok(set_animations(app, pref))
+        }
+        // `{"animations": "system"|"on"|"off"}` sets the choice; without it, reports it.
+        "ui.animations" => match params.get("animations").and_then(Value::as_str) {
+            Some(name) => match crate::animation::AnimationPref::parse(name) {
+                Some(pref) => Ok(set_animations(app, pref)),
+                None => Err(format!("unknown animations choice \"{}\" (system, on or off)", name.chars().take(40).collect::<String>())),
+            },
+            None => Ok(animations_json(app)),
+        },
         "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
             let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
             Ok(set_save_format(app, format))
@@ -274,8 +338,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "ui.resetpalettes" => {
             let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
-            let save_version = std::mem::take(&mut app.ui.save_version);
-            app.ui = crate::UiState { in_window_menu: menu, theme, interface_language, save_format, save_version, ..Default::default() };
+            let (animations, save_version) = (app.ui.animations, std::mem::take(&mut app.ui.save_version));
+            app.ui = crate::UiState { in_window_menu: menu, theme, animations, interface_language, save_format, save_version, ..Default::default() };
             Ok(Value::Null)
         }
         "ui.start" => {
@@ -308,6 +372,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         | "ui.dialog.qselect"
         | "ui.dialog.parameters" => {
             app.ui.dialog = Some(id.trim_start_matches("ui.dialog.").to_string());
+            Ok(Value::Null)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "ui.updates.check" => {
+            crate::updates_ui::check_now(app);
             Ok(Value::Null)
         }
         "ui.dialog.close" => {
@@ -355,6 +424,21 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("dsettings".into());
             Ok(Value::Null)
         }
+        // Typed or from a menu (no parameters): the Hatch and Gradient dialog (HPDLGMODE 1) and the
+        // Hatch Edit dialog. -HATCH, -HATCHEDIT and JSON calls keep the command line and the JSON form.
+        "hatch" | "h" | "bh" | "gradient" | "gd" if params.is_null() && crate::hatchdlg::dialog_on(app) => {
+            crate::hatchdlg::open_create(app, matches!(id, "gradient" | "gd"));
+            Ok(Value::Null)
+        }
+        // Typed or from the Tools menu: the Command Aliases dialog. JSON calls keep the JSON form.
+        "aliasedit" if params.is_null() => {
+            crate::aliasdlg::open(app);
+            Ok(Value::Null)
+        }
+        "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
+            crate::hatchdlg::open_edit(app);
+            Ok(Value::Null)
+        }
         "properties" | "pr" | "props" | "ch" if params.is_null() => {
             crate::docking::command(app, false, &json!({"operation":"open", "panel":"properties"}))
         }
@@ -392,6 +476,22 @@ fn theme_json(app: &CadApp) -> Value {
         p => p.resolve(None),
     };
     json!({ "theme": app.ui.theme.as_str(), "shown": if shown == egui::Theme::Light { "light" } else { "dark" } })
+}
+
+fn set_animations(app: &mut CadApp, pref: crate::animation::AnimationPref) -> Value {
+    app.ui.animations = pref;
+    let shown = if app.shows_animations() { "on" } else { "off" };
+    app.session.echo(match pref {
+        crate::animation::AnimationPref::System => format!("Animation effects follow the system setting ({shown})"),
+        _ => format!("Animation effects are {shown}"),
+    });
+    animations_json(app)
+}
+
+/// The animation effects choice and whether the interface animates with it (System resolves
+/// against the OS setting).
+fn animations_json(app: &CadApp) -> Value {
+    json!({ "animations": app.ui.animations.as_str(), "shown": app.shows_animations() })
 }
 
 /// A menu entry.
@@ -441,7 +541,30 @@ pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
             add(menu, label, id, *sc, true);
         }
     }
+    if let Some((_, file)) = out.iter_mut().find(|(m, _)| m == "File") {
+        let at = file.iter().position(|e| matches!(e, Entry::Item { id, .. } if id == "open")).map_or(0, |i| i + 1);
+        file.insert(at, Entry::Sub { label: OPEN_RECENT.into(), children: recent_entries(app) });
+    }
     out
+}
+
+/// The items of File ▸ Open Recent: the recent files by name, newest first, then Clear Recent Files.
+pub fn recent_entries(app: &CadApp) -> Vec<Entry> {
+    let mut entries: Vec<Entry> = app
+        .ui
+        .recent_files
+        .iter()
+        .enumerate()
+        .map(|(i, path)| Entry::Item { label: file_name(path), id: format!("{RECENT_ITEM}{i}"), shortcut: None, enabled: true })
+        .collect();
+    let enabled = !app.ui.recent_files.is_empty();
+    entries.push(Entry::Item { label: "Clear Recent Files".into(), id: RECENT_CLEAR.into(), shortcut: None, enabled });
+    entries
+}
+
+/// The file name of `path` (the whole path when it has none).
+pub(crate) fn file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string())
 }
 
 /// Turn a registry shortcut ("Cmd+Shift+Z") into the form shown on this platform: macOS symbols ("⇧⌘Z") or
@@ -485,8 +608,11 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         ui,
         |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                for (name, entries) in &tree {
-                    ui.menu_button(crate::i18n::menu(name), |ui| {
+                // Titles first, so a hovered title can take over before any menu is drawn.
+                let titles: Vec<egui::Response> = tree.iter().map(|(name, _)| ui.add(egui::Button::new(crate::i18n::menu(name)))).collect();
+                switch_on_hover(ui.ctx(), &titles);
+                for ((_, entries), title) in tree.iter().zip(&titles) {
+                    egui::Popup::menu(title).show(|ui| {
                         for e in entries {
                             entry_ui(ui, e, &mut clicked);
                         }
@@ -500,10 +626,42 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Like choosing a menu item: starts the command interactively.
+/// While one menu of the bar is open, pointing at another title opens that menu instead.
+fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
+    let is_open = |title: &egui::Response| egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(title));
+    if !titles.iter().any(is_open) {
+        return;
+    }
+    // A click on a title toggles its menu by itself.
+    if let Some(title) = titles.iter().find(|t| t.hovered() && !t.clicked() && !is_open(t)) {
+        egui::Popup::open_id(ctx, egui::Popup::default_response_id(title));
+    }
+}
+
+/// Activate a menu command. QuickCalc toggles transparently; other items clear pending
+/// command-line text and start their command interactively.
 pub fn activate(app: &mut CadApp, id: &str) {
+    if id == "ui.toggle.quickcalc" {
+        run_transparent(app, id);
+        return;
+    }
     app.cmd.buffer.clear();
     app.start(id);
+}
+
+/// Run `id` with default parameters without cancelling the active command, as the drafting
+/// toggles (F3, F7-F12, the status bar buttons) are in AutoCAD.
+pub fn run_transparent(app: &mut CadApp, id: &str) {
+    match app.session.execute(id, &json!({})) {
+        Ok(v) => {
+            if let Some(m) = v.get("message").and_then(Value::as_str) {
+                app.session.echo(m.to_string());
+            }
+        }
+        Err(_) => {
+            let _ = app.run(id, json!({}));
+        }
+    }
 }
 
 /// Keyboard shortcuts and function keys.
@@ -544,7 +702,14 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(Modifiers::NONE, Key::F12), "dynmode"),
     ];
     crate::clipboard::mirror(app, ctx);
-    if ctx.egui_wants_keyboard_input() || app.closing.is_some() {
+    if app.closing.is_some() {
+        return;
+    }
+    // A palette toggle is global even while its expression field owns keyboard focus.
+    if ctx.input_mut(|i| i.consume_shortcut(&sc(cmd, Key::Num8))) {
+        run_transparent(app, "ui.toggle.quickcalc");
+    }
+    if ctx.egui_wants_keyboard_input() {
         return;
     }
     // Cmd/Ctrl+C, X and V arrive as clipboard events, not key presses.
@@ -567,16 +732,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         // Toggles run transparently (they don't cancel the active command).
         let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle"].contains(&id);
         if transparent || id.starts_with("ui.") {
-            match app.session.execute(id, &json!({})) {
-                Ok(v) => {
-                    if let Some(m) = v.get("message").and_then(Value::as_str) {
-                        app.session.echo(m.to_string());
-                    }
-                }
-                Err(_) => {
-                    let _ = app.run(id, json!({}));
-                }
-            }
+            run_transparent(app, id);
         } else {
             activate(app, id);
         }
@@ -608,6 +764,7 @@ mod tests {
                 log.borrow_mut().push(name.to_string());
                 answer.clone()
             })),
+            ..Services::default()
         };
         (CadApp::new(Session::new(), services), asked)
     }

@@ -5,7 +5,7 @@
 //! cadcraft-cli convert IN.dxf OUT.(dxf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadcraft-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
 //! cadcraft-cli commands [FILTER]                   command catalog (JSON)
-//! cadcraft-cli mcp [--connect HOST:PORT]           MCP server on stdio (headless or bridged to the app)
+//! cadcraft-cli mcp [--connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (headless or bridged to the app)
 //! cadcraft-cli perf [N]                            timing table on a synthetic N-entity drawing
 //! cadcraft-cli perf FILE                           canvas display-list build of a drawing, zoomed in step by step
 //! cadcraft-cli sample (bracket|floorplan) OUT       write a built-in sample drawing
@@ -28,7 +28,7 @@ macro_rules! outln {
 
 use std::process::ExitCode;
 
-use cadcraft_engine::doc::Space;
+use cadcraft_engine::doc::{Handle, Space};
 use cadcraft_engine::geom::{Bounds2, Vec2};
 use cadcraft_engine::{Session, View};
 use serde_json::{Value, json};
@@ -60,7 +60,7 @@ const USAGE: &str = "usage:
   cadcraft-cli convert IN.dxf OUT.(dxf|dwg|svg|png|pdf) [FRAMING]
   cadcraft-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadcraft-cli commands [FILTER]
-  cadcraft-cli mcp [--connect HOST:PORT]
+  cadcraft-cli mcp [--connect HOST:PORT [--lazy] [--launch]]
   cadcraft-cli perf [N | FILE]
   cadcraft-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
   cadcraft-cli --version
@@ -73,7 +73,15 @@ image framing (png 2400x1600, svg, pdf; always model space):
                            scaled to fit the image without distortion.
   --view extents           always fit the drawing extents.
   --view current           the current view (as last set by zoom/pan/view.set; a freshly
-                           opened drawing's view is its extents plus a 10% margin).";
+                           opened drawing's view is its extents plus a 10% margin).
+
+--cmd chaining (run):
+  A --cmd parameter value of exactly \"{last}\" is replaced with the last object handle an
+  earlier --cmd in the same run returned, so a command can act on what the previous one made:
+    --cmd 'mview {\"p1\":[20,20],\"p2\":[200,150]}'        prints {\"viewports\":[\"100\"]}
+    --cmd 'viewport.set {\"handle\":\"{last}\",\"scale\":1}' changes viewport 100
+  It works in any parameter, at any depth (e.g. \"handles\":[\"{last}\"]); every other string is
+  passed unchanged. With no earlier returned handle the run fails and says so.";
 
 /// What part of model space an image export shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -172,6 +180,11 @@ fn install_io() {
     cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
         cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
+    // AutoLISP's entget, entmake and entmod see entities as DXF groups.
+    cadcraft_engine::cmd::file::set_entity_codec(cadcraft_engine::cmd::file::EntityCodec {
+        groups: cadcraft_io::entity_groups,
+        entity: cadcraft_io::entity_from_groups,
+    });
 }
 
 fn open(s: &mut Session, path: &str) -> Result<(), String> {
@@ -213,6 +226,12 @@ fn info(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Write `bytes` to `out` through the engine's atomic writer (an exclusively created sibling file
+/// renamed over `out`), so a failed or interrupted write leaves the previous file untouched.
+fn write_atomic(out: &str, bytes: &[u8]) -> std::io::Result<()> {
+    cadcraft_engine::atomic_write::write_atomic(std::path::Path::new(out), bytes)
+}
+
 fn export(s: &Session, out: &str) -> Result<(), String> {
     export_framed(s, out, None)
 }
@@ -220,7 +239,7 @@ fn export(s: &Session, out: &str) -> Result<(), String> {
 fn export_framed(s: &Session, out: &str, window: Option<Bounds2>) -> Result<(), String> {
     let d = s.doc().map_err(|e| e.to_string())?;
     let bytes = cadcraft_io::write_framed(d, out, window).map_err(|e| e.to_string())?;
-    std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    write_atomic(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("wrote {out} ({} bytes)", bytes.len());
     if cadcraft_engine::cmd::file::drops_unknown(out) {
         let lost = cadcraft_engine::cmd::file::not_saved(d);
@@ -239,7 +258,7 @@ fn sample(args: &[String]) -> Result<(), String> {
         other => return Err(format!("unknown sample `{other}` (bracket, floorplan)")),
     };
     let bytes = cadcraft_io::write(&d, out).map_err(|e| e.to_string())?;
-    std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    write_atomic(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("wrote {out} ({} bytes)", bytes.len());
     Ok(())
 }
@@ -267,8 +286,173 @@ fn convert(args: &[String]) -> Result<(), String> {
     check_framed_output(framing, Some(o))?;
     let mut s = Session::empty();
     open(&mut s, i)?;
+    if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
+        eprintln!("{m}");
+    }
+    if cadcraft_io::is_image(o)
+        && let Some(m) = undrawn_message(s.doc().map_err(|e| e.to_string())?, i)
+    {
+        eprintln!("{m}");
+    }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
+}
+
+/// The warning for the model-space entities of `path` an image can't show, by type (those kept
+/// as unknown objects, `Proxy` in `info`), or `None` when there are none.
+fn undrawn_message(d: &cadcraft_engine::doc::Drawing, path: &str) -> Option<String> {
+    let mut types: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let cadcraft_engine::doc::EntityKind::Unknown(u) = &e.kind {
+            let n = types.entry(u.dxf_type.as_str()).or_insert(0);
+            *n = n.saturating_add(1);
+        }
+    }
+    let n = types.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = types.iter().map(|(t, n)| format!("{t}: {n}")).collect();
+    let entities = if n == 1 { "entity" } else { "entities" };
+    Some(format!("{path}: {n} {entities} not drawn ({})", list.join(", ")))
+}
+
+/// The warning for the records of `path` the reader could not place, or `None` when there are none.
+fn skipped_message(d: &cadcraft_engine::doc::Drawing, path: &str) -> Option<String> {
+    let n = d.skipped_records.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = d.skipped_records.iter().map(|(section, n)| format!("{section}: {n}")).collect();
+    let records = if n == 1 { "record" } else { "records" };
+    Some(format!("{path}: {n} {records} could not be read and are left out ({})", list.join(", ")))
+}
+
+/// A `--cmd` parameter value of exactly `{last}` is filled in with the last object handle an
+/// earlier `--cmd` in the same run returned: `mview` answers `{"viewports":["100"]}`, so
+/// `viewport.set {"handle":"{last}","scale":1}` changes viewport 100. Any other string is passed
+/// through unchanged, and `--script` text is never rewritten.
+const LAST_HANDLE: &str = "{last}";
+
+/// How deep [`result_handles`] walks a command result (results are the engine's own JSON).
+const RESULT_DEPTH: usize = 16;
+
+/// Result keys whose values are object references: the engine's result convention for handles.
+/// A handle can be a string (`handle`, `viewport`, `insert`…) or a list of them (`handles`,
+/// `viewports`, `members`…). Every other field may hold a user-defined name, a message or a
+/// count, and is never read as a handle — a group named `100` is a name, not object `100`.
+fn handle_field(key: &str) -> bool {
+    matches!(
+        key,
+        "handle"
+            | "handles"
+            | "viewport"
+            | "viewports"
+            | "boundary"
+            | "clip"
+            | "insert"
+            | "members"
+            | "source"
+            | "objects"
+            | "entities"
+            | "selection"
+            | "parts"
+            | "refs"
+            | "matches"
+            | "line"
+            | "arc"
+            | "blocks"
+    )
+}
+
+/// Collect the handles of `v`, a value under a handle field: a handle string, an array of them,
+/// or objects that carry handle fields of their own (`entities`, `parts`).
+fn collect_result_handles(s: &Session, v: &Value, depth: usize, out: &mut Vec<Handle>) {
+    if depth > RESULT_DEPTH {
+        return;
+    }
+    match v {
+        Value::String(t) => {
+            if let Some(h) = Handle::parse_hex(t)
+                && s.doc().is_ok_and(|d| d.entity(h).is_some())
+            {
+                out.push(h);
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| collect_result_handles(s, x, depth + 1, out)),
+        Value::Object(m) => {
+            for (k, x) in m {
+                if handle_field(k) {
+                    collect_result_handles(s, x, depth + 1, out);
+                } else {
+                    find_result_handles(s, x, depth + 1, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Find handle fields nested in containers that are not handles themselves (`groups` in
+/// `groups.list`, whose members are handles): strings here are names, never references.
+fn find_result_handles(s: &Session, v: &Value, depth: usize, out: &mut Vec<Handle>) {
+    if depth > RESULT_DEPTH {
+        return;
+    }
+    match v {
+        Value::Array(a) => a.iter().for_each(|x| find_result_handles(s, x, depth + 1, out)),
+        Value::Object(m) => {
+            for (k, x) in m {
+                if handle_field(k) {
+                    collect_result_handles(s, x, depth + 1, out);
+                } else {
+                    find_result_handles(s, x, depth + 1, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The object handles a command result mentions, in the order it lists them. A handle-only result
+/// (a handle string or an array of them) counts as it is; otherwise only handle fields do.
+fn result_handles(s: &Session, v: &Value, depth: usize, out: &mut Vec<Handle>) {
+    match v {
+        Value::String(_) => collect_result_handles(s, v, depth, out),
+        Value::Array(a) if a.iter().all(Value::is_string) => collect_result_handles(s, v, depth, out),
+        Value::Array(_) | Value::Object(_) => find_result_handles(s, v, depth, out),
+        _ => {}
+    }
+}
+
+/// The last handle `r` returned: what a later `{last}` stands for.
+fn returned_handle(s: &Session, r: &Value) -> Option<Handle> {
+    let mut hs = Vec::new();
+    result_handles(s, r, 0, &mut hs);
+    hs.last().copied()
+}
+
+/// The active drawing's identity ([`cadcraft_engine::DocState::uid`]): a handle is only meaningful
+/// in the drawing it came from, and `new`, `open`, `document.switch` and `close` can make another
+/// drawing current.
+fn active_drawing(s: &Session) -> Option<u64> {
+    s.docs.get(s.active).map(|st| st.uid)
+}
+
+/// Every `{last}` in `p`, at any depth, replaced by `h`. With no handle to fill in it is an
+/// error, never a token reaching the command as a (bad) handle.
+fn fill_last(p: &Value, h: Option<Handle>) -> Result<Value, String> {
+    match p {
+        Value::String(t) if t.as_str() == LAST_HANDLE => match h {
+            Some(h) => Ok(Value::String(h.hex())),
+            None => Err(format!("`{LAST_HANDLE}` needs an earlier --cmd in this run to have returned a handle")),
+        },
+        Value::Array(a) => a.iter().map(|x| fill_last(x, h)).collect::<Result<Vec<_>, _>>().map(Value::Array),
+        Value::Object(m) => {
+            m.iter().map(|(k, x)| Ok((k.clone(), fill_last(x, h)?))).collect::<Result<serde_json::Map<String, Value>, _>>().map(Value::Object)
+        }
+        other => Ok(other.clone()),
+    }
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -306,13 +490,31 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     check_framed_output(framing, exp.as_deref())?;
     let before = model_views(&s);
+    let mut last_handle: Option<Handle> = None;
     for (kind, body) in steps {
+        // A handle belongs to the drawing that returned it: if this step makes another drawing
+        // current (`new`, `open`, `document.switch`, `close`, or a script running one of them),
+        // the remembered handle is stale. A handle the step itself returns is taken afterwards,
+        // so it is a handle of the drawing it made current.
+        let drawing = active_drawing(&s);
         match kind.as_str() {
-            "script" => s.script(&body).map_err(|e| e.to_string())?,
+            "script" => {
+                s.script(&body).map_err(|e| e.to_string())?;
+                if active_drawing(&s) != drawing {
+                    last_handle = None;
+                }
+            }
             _ => {
                 let (id, json) = body.split_once(' ').unwrap_or((&body, "{}"));
                 let params: Value = serde_json::from_str(json).map_err(|e| format!("--cmd {id}: {e}"))?;
+                let params = fill_last(&params, last_handle).map_err(|e| format!("--cmd {id}: {e}"))?;
                 let r = s.execute(id, &params).map_err(|e| e.to_string())?;
+                if active_drawing(&s) != drawing {
+                    last_handle = None;
+                }
+                if let Some(h) = returned_handle(&s, &r) {
+                    last_handle = Some(h);
+                }
                 if !r.is_null() {
                     outln!("{r}");
                 }
@@ -524,37 +726,47 @@ fn perf(args: &[String]) -> Result<(), String> {
 enum McpTarget {
     /// An in-process drawing session (no `--connect`).
     Headless,
-    /// The running app's control channel at `HOST:PORT`.
-    Connect(String),
+    /// The running app's control channel at `HOST:PORT`; `lazy`: reached at the first call;
+    /// `launch`: opened then if it isn't running.
+    Connect { addr: String, lazy: bool, launch: bool },
 }
 
 /// Parses the arguments after `mcp`. `--connect` must be followed by a `HOST:PORT`; a missing,
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
-    let mut target = McpTarget::Headless;
+    let mut addr: Option<String> = None;
+    let (mut lazy, mut launch) = (false, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--connect" => {
-                let addr = it
+                let a = it
                     .next()
                     .map(|v| v.trim())
                     .filter(|v| !v.is_empty() && !v.starts_with('-'))
                     .ok_or("--connect needs HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)")?;
-                if target != McpTarget::Headless {
+                if addr.is_some() {
                     return Err("--connect given more than once".into());
                 }
-                target = McpTarget::Connect(addr.to_string());
+                addr = Some(a.to_string());
             }
+            "--lazy" => lazy = true,
+            "--launch" => launch = true,
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
         }
     }
-    Ok(target)
+    match addr {
+        // `--launch` connects at the first call too (the app opens then).
+        Some(addr) => Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch }),
+        None if lazy || launch => Err("--lazy and --launch need --connect HOST:PORT".into()),
+        None => Ok(McpTarget::Headless),
+    }
 }
 
 fn mcp(args: &[String]) -> Result<(), String> {
     let backend: Box<dyn cadcraft_mcp::Backend> = match parse_mcp_args(args)? {
-        McpTarget::Connect(addr) => match cadcraft_mcp::Remote::connect(&addr) {
+        McpTarget::Connect { addr, lazy: true, launch } => Box::new(cadcraft_mcp::Remote::lazy(&addr, launch)),
+        McpTarget::Connect { addr, .. } => match cadcraft_mcp::Remote::connect(&addr) {
             Ok(r) => Box::new(r),
             Err(e) => return Err(format!("cadcraft-cli: cannot connect to {addr}: {e}")),
         },
@@ -580,8 +792,14 @@ mod mcp_args_tests {
 
     #[test]
     fn mcp_connect_with_address_selects_remote() {
-        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), Ok(McpTarget::Connect("127.0.0.1:7979".into())));
-        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), Ok(McpTarget::Connect("localhost:7979".into())));
+        let to = |addr: &str, lazy, launch| Ok(McpTarget::Connect { addr: addr.into(), lazy, launch });
+        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), to("127.0.0.1:7979", false, false));
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), to("localhost:7979", false, false));
+        assert_eq!(parse_mcp_args(&args(&["--lazy", "--connect", "localhost:7979"])), to("localhost:7979", true, false));
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979", "--launch"])), to("localhost:7979", true, true));
+        // Without an app to reach they mean nothing: never a headless session.
+        assert!(parse_mcp_args(&args(&["--lazy"])).is_err());
+        assert!(parse_mcp_args(&args(&["--launch"])).is_err());
     }
 
     #[test]
@@ -631,6 +849,10 @@ fn cli() -> ExitCode {
             outln!("cadcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+        Some("--help" | "-h" | "help") => {
+            outln!("{USAGE}");
+            Ok(())
+        }
         _ => Err(USAGE.into()),
     };
     match r {
@@ -645,6 +867,37 @@ fn cli() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cadcraft-cli-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[test]
+    fn write_atomic_replaces_file_and_leaves_no_staging_files() {
+        let dir = scratch_dir("replace");
+        let out = dir.join("a.dxf");
+        let out = out.to_str().expect("utf-8 path");
+        write_atomic(out, b"old").expect("create");
+        write_atomic(out, b"new").expect("overwrite");
+        assert_eq!(std::fs::read(out).expect("read"), b"new");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomic_failure_keeps_destination_and_cleans_up() {
+        let dir = scratch_dir("fail");
+        let out = dir.join("target");
+        std::fs::create_dir(&out).expect("dir as destination");
+        std::fs::write(out.join("keep"), b"x").expect("seed");
+        assert!(write_atomic(out.to_str().expect("utf-8 path"), b"new").is_err());
+        assert_eq!(std::fs::read(out.join("keep")).expect("kept"), b"x");
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn b(x0: f64, y0: f64, x1: f64, y1: f64) -> Bounds2 {
         Bounds2::new(Vec2::new(x0, y0), Vec2::new(x1, y1))
@@ -715,6 +968,40 @@ mod tests {
         assert!(check_framed_output(Framing::Extents, None).is_err());
         assert!(check_framed_output(Framing::Extents, Some("a.png")).is_ok());
         assert!(check_framed_output(Framing::Auto, Some("a.dxf")).is_ok());
+    }
+
+    #[test]
+    fn last_placeholder_takes_the_previous_handle() {
+        let mut s = sample_session();
+        let r = s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+        let h = returned_handle(&s, &r).expect("LINE returns its handle");
+        assert_eq!(fill_last(&json!({"handle": "{last}"}), Some(h)), Ok(json!({"handle": h.hex()})));
+        // Nested, as in a selection list.
+        assert_eq!(fill_last(&json!({"handles": ["{last}", "1"]}), Some(h)), Ok(json!({"handles": [h.hex(), "1"]})));
+        // Only the exact token: a name or a sentence that merely contains it stays as written.
+        for p in [json!("last"), json!("{last} "), json!({"name": "last"})] {
+            assert_eq!(fill_last(&p, Some(h)), Ok(p.clone()));
+        }
+        // Nothing returned yet: an error, not a token passed to the command as a bad handle.
+        assert!(fill_last(&json!({"handle": "{last}"}), None).unwrap_err().contains("{last}"));
+    }
+
+    /// Handles are read from a result by looking the strings up in the drawing: counts and names
+    /// are not mistaken for handles, and `mview`'s `viewports` works like `handle`/`handles`.
+    #[test]
+    fn returned_handle_reads_only_real_handles() {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+        let r = s.execute("mview", &json!({"p1": [20, 20], "p2": [200, 150]})).unwrap();
+        let h = returned_handle(&s, &r).expect("mview returns its viewport handle");
+        assert!(r["viewports"].as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some(h.hex().as_str()))), "{r}");
+        assert_eq!(returned_handle(&s, &json!({"changed": 3, "name": "A1"})), None);
+        // The most recent of several.
+        let a = s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+        let b = s.execute("line", &json!({"points": [[0, 0], [2, 0]]})).unwrap();
+        let (ha, hb) = (returned_handle(&s, &a).unwrap(), returned_handle(&s, &b).unwrap());
+        assert_eq!(returned_handle(&s, &json!({"handles": [ha.hex(), hb.hex()]})), Some(hb));
     }
 
     #[test]
