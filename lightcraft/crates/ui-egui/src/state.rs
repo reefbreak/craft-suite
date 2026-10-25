@@ -70,6 +70,14 @@ pub enum BeforeAfter {
     SplitTopBottom,
 }
 
+impl BeforeAfter {
+    /// One of the Before / After layouts (two views or a split line), which the bottom bar's
+    /// Before/After (Y) button stands for. Show Original (`\`) is a view of its own, not a layout.
+    pub fn is_layout(self) -> bool {
+        !matches!(self, BeforeAfter::Off | BeforeAfter::Original)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CropOverlay {
@@ -83,6 +91,70 @@ pub enum CropOverlay {
     None,
 }
 
+/// Tool Overlay: when the retouching tools' pins (Remove / Heal / Clone spots, mask pins) show on
+/// the photo. Shift+H steps through the modes in this order (`view.toolOverlay`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolOverlay {
+    /// While the pointer is over the photo (hidden while a new spot or brush stroke is painted).
+    #[default]
+    Auto,
+    Always,
+    /// Only the selected spot's or mask's.
+    Selected,
+    /// None; the tool still works (a click still adds a spot).
+    Never,
+}
+
+impl ToolOverlay {
+    pub const ALL: [ToolOverlay; 4] = [ToolOverlay::Auto, ToolOverlay::Always, ToolOverlay::Selected, ToolOverlay::Never];
+
+    /// The id used by `view.toolOverlay {mode}` and the saved settings.
+    pub fn name(self) -> &'static str {
+        match self {
+            ToolOverlay::Auto => "auto",
+            ToolOverlay::Always => "always",
+            ToolOverlay::Selected => "selected",
+            ToolOverlay::Never => "never",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ToolOverlay> {
+        ToolOverlay::ALL.into_iter().find(|m| m.name().eq_ignore_ascii_case(s.trim()))
+    }
+
+    /// Menu label.
+    pub fn label(self) -> &'static str {
+        match self {
+            ToolOverlay::Auto => "Auto",
+            ToolOverlay::Always => "Always",
+            ToolOverlay::Selected => "Selected",
+            ToolOverlay::Never => "Never",
+        }
+    }
+
+    /// The mode Shift+H steps to.
+    pub fn next(self) -> ToolOverlay {
+        match self {
+            ToolOverlay::Auto => ToolOverlay::Always,
+            ToolOverlay::Always => ToolOverlay::Selected,
+            ToolOverlay::Selected => ToolOverlay::Never,
+            ToolOverlay::Never => ToolOverlay::Auto,
+        }
+    }
+
+    /// Whether a pin shows: `selected` = its spot or mask is the selected one, `live` = the pointer
+    /// is over the photo (or a pin is being dragged), which is what Auto waits for.
+    pub fn shows(self, selected: bool, live: bool) -> bool {
+        match self {
+            ToolOverlay::Auto => live,
+            ToolOverlay::Always => true,
+            ToolOverlay::Selected => selected,
+            ToolOverlay::Never => false,
+        }
+    }
+}
+
 /// Which view the app opens in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,6 +164,18 @@ pub enum StartupView {
     Last,
     Grid,
     Detail,
+}
+
+/// What the desktop app opens at launch (Settings ▸ General ▸ At launch; issue #1290). `--library`
+/// and `LIGHTCRAFT_LIBRARY` come first either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LaunchLibrary {
+    /// The library open when the app last quit (holding Alt/Option as the window appears asks once).
+    #[default]
+    Last,
+    /// A window lists the recent libraries to choose from.
+    Ask,
 }
 
 /// When grid cells show their rating / flag / edited badges.
@@ -125,6 +209,131 @@ impl InfoOverlay {
             InfoOverlay::Exposure => InfoOverlay::Off,
         }
     }
+}
+
+/// One line of the loupe's info overlay, chosen in View ▸ View Options (Lightroom Classic's Loupe
+/// Info 1 / Loupe Info 2). A line with nothing to show for a photo is left out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LoupeInfoField {
+    #[default]
+    None,
+    FileName,
+    /// The capture date and time (the import date when the photo has none).
+    CaptureDate,
+    /// Width × height in pixels.
+    Dimensions,
+    /// Shutter speed, aperture, ISO and focal length.
+    Exposure,
+    Camera,
+    Lens,
+    /// Camera and lens on one line.
+    CameraAndLens,
+}
+
+impl LoupeInfoField {
+    /// Every field, in the order View Options lists them.
+    pub const ALL: &'static [LoupeInfoField] = &[
+        LoupeInfoField::None,
+        LoupeInfoField::FileName,
+        LoupeInfoField::CaptureDate,
+        LoupeInfoField::Dimensions,
+        LoupeInfoField::Exposure,
+        LoupeInfoField::Camera,
+        LoupeInfoField::Lens,
+        LoupeInfoField::CameraAndLens,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LoupeInfoField::None => "None",
+            LoupeInfoField::FileName => "File Name",
+            LoupeInfoField::CaptureDate => "Capture Date",
+            LoupeInfoField::Dimensions => "Dimensions",
+            LoupeInfoField::Exposure => "Exposure",
+            LoupeInfoField::Camera => "Camera",
+            LoupeInfoField::Lens => "Lens",
+            LoupeInfoField::CameraAndLens => "Camera & Lens",
+        }
+    }
+}
+
+/// The three lines each mode of the info overlay shows: Info 1 ([`InfoOverlay::Basic`]) and
+/// Info 2 ([`InfoOverlay::Exposure`]), and which of them Show Briefly When Photo Changes shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LoupeInfo {
+    pub info1: [LoupeInfoField; 3],
+    pub info2: [LoupeInfoField; 3],
+    /// Show Briefly When Photo Changes: while the info overlay is off, this Info shows for
+    /// [`BRIEF_INFO_SECS`] each time the loupe changes to another photo ([`InfoOverlay::Off`]:
+    /// neither).
+    pub briefly: InfoOverlay,
+}
+
+/// Passes after Add Keywords within which the Add keyword box takes the cursor (the panel may
+/// need a pass to open first).
+pub const FOCUS_KEYWORDS_PASSES: u64 = 2;
+
+/// How long Show Briefly When Photo Changes shows the info overlay (seconds).
+pub const BRIEF_INFO_SECS: f64 = 3.0;
+
+/// When the loupe last changed photo, for Show Briefly When Photo Changes
+/// ([`LoupeInfo::briefly`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BriefInfo {
+    /// The photo the loupe showed last.
+    pub photo: Option<lightcraft_catalog::PhotoId>,
+    /// When the loupe changed to it (seconds on egui's clock).
+    pub since: f64,
+    /// The brief info overlay shows this frame.
+    pub shown: bool,
+}
+
+impl LoupeInfo {
+    /// Info 1's lines before they are changed (and after Use Defaults).
+    pub const INFO1: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::CaptureDate, LoupeInfoField::Dimensions];
+    /// Info 2's lines before they are changed (and after Use Defaults).
+    pub const INFO2: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::Exposure, LoupeInfoField::CameraAndLens];
+}
+
+impl Default for LoupeInfo {
+    fn default() -> Self {
+        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2, briefly: InfoOverlay::Off }
+    }
+}
+
+/// View ▸ Loupe Overlay ▸ Layout Image (Lightroom Classic's loupe overlay): a graphic with
+/// transparency, such as a magazine cover's masthead and cover lines, drawn over the photo in the
+/// loupe (`panels::layout_overlay`). Saved with the UI state, so the layout stays chosen across
+/// launches.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LayoutImage {
+    /// The graphic's file; empty until one is chosen.
+    pub path: String,
+    /// Drawn over the loupe (⌥⌘O).
+    pub show: bool,
+    /// The graphic's opacity, 0..=1.
+    pub opacity: f32,
+    /// How dark the photo is outside the graphic's box, 0..=1 (0: not darkened).
+    pub matte: f32,
+    /// Bumped by each Choose Layout Image…, so choosing the same file again reads it again (after
+    /// it was edited elsewhere).
+    #[serde(skip)]
+    pub revision: u32,
+}
+
+impl Default for LayoutImage {
+    fn default() -> Self {
+        LayoutImage { path: String::new(), show: false, opacity: 1.0, matte: 0.0, revision: 0 }
+    }
+}
+
+impl LayoutImage {
+    /// The opacity and matte steps View ▸ Loupe Overlay offers.
+    pub const OPACITY_STEPS: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
+    pub const MATTE_STEPS: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
 }
 
 /// Lights Out (View ▸ Lights Out, Shift+L cycles On → Dim → Off → On; Esc turns the lights back
@@ -233,9 +442,28 @@ pub struct AppSettings {
     /// Libraries opened recently, newest first (File ▸ Open Recent Library; at most
     /// [`RECENT_LIBRARIES`]).
     pub recent_libraries: Vec<String>,
+    /// When each recent library was last opened (path → the session clock's ISO 8601 time), for
+    /// the launch window. A separate key so files from earlier versions, and earlier versions
+    /// reading this one, keep their list (issue #1290).
+    #[serde(rename = "recentLibrariesOpened", deserialize_with = "lenient")]
+    pub recent_opened: std::collections::BTreeMap<String, String>,
+    /// Open the last library at launch, or ask (a value this version doesn't know reads as the
+    /// default).
+    #[serde(deserialize_with = "lenient")]
+    pub at_launch: LaunchLibrary,
     pub startup_view: StartupView,
-    /// Ask before moving photos to Recently Deleted (keyboard and menu).
+    /// Ask before moving photos to Recently Deleted. Saved under a new key: earlier versions saved
+    /// `confirmDelete: false` by default (#1239).
+    #[serde(rename = "askBeforeDelete")]
     pub confirm_delete: bool,
+    /// Ask before photos dropped on a Folders row move there on disk (the dialog's "Don't ask
+    /// again" turns it off).
+    pub ask_before_move: bool,
+    /// A click on the dimmed backdrop around a dialog closes it, like Esc (off: a stray click
+    /// never throws away a dialog's choices).
+    pub close_dialogs_outside: bool,
+    /// Photos and folders dropped on the window import at once, without the import review.
+    pub import_dropped_directly: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
@@ -253,12 +481,19 @@ pub struct AppSettings {
     pub photocraft_file: EditFile,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
+    /// The Info panel's metadata fields with several photos selected: true (the default) shows the
+    /// values the selected photos share and marks each field where they differ (Selected Photos),
+    /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
+    pub info_selected_photos: bool,
     /// Filmstrip: file names above the thumbnails.
     pub film_names: bool,
     /// Filmstrip: rating / flag / edited badges on the thumbnails.
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
+    /// "Rendering…" while the photo it shows is not the finished render.
+    pub loupe_messages: bool,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -273,6 +508,33 @@ pub struct AppSettings {
     /// The monitor's ICC profile previews are shown through (`app.displayProfile`; "" = none:
     /// the display is treated as sRGB).
     pub display_profile: String,
+    /// The Keywording box: whole keyword paths, or grouped by the keyword they are inside.
+    #[serde(deserialize_with = "lenient")]
+    pub keyword_chips: KeywordChips,
+    /// View ▸ Focus Point: draw the box the camera focused on (`view.focusPoint`).
+    pub focus_point: bool,
+    /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
+    /// when the photo has one (`view.zoomToFocus`).
+    pub zoom_to_focus: bool,
+    /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
+    #[serde(deserialize_with = "lenient")]
+    pub loupe_info: LoupeInfo,
+    /// File ▸ Import Lightroom Catalog…: ask whether the catalog merges into the open library or
+    /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
+    #[serde(deserialize_with = "lenient")]
+    pub lightroom_import: LightroomImport,
+}
+
+/// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
+/// `"ask"` / `"alwaysMerge"`; anything else in a hand-edited `ui.json` reads as [`Self::Ask`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LightroomImport {
+    /// A window asks each time: merge into the open library, or create a new library for it.
+    #[default]
+    Ask,
+    /// Merge into the open library without asking (how imports worked before the window).
+    AlwaysMerge,
 }
 
 impl Default for AppSettings {
@@ -280,8 +542,13 @@ impl Default for AppSettings {
         AppSettings {
             library_path: String::new(),
             recent_libraries: Vec::new(),
+            recent_opened: Default::default(),
+            at_launch: LaunchLibrary::Last,
             startup_view: StartupView::Last,
-            confirm_delete: false,
+            confirm_delete: true,
+            ask_before_move: true,
+            close_dialogs_outside: false,
+            import_dropped_directly: false,
             gpu: true,
             preview_limit: 0,
             external_editor: String::new(),
@@ -289,15 +556,22 @@ impl Default for AppSettings {
             photocraft_path: String::new(),
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
+            info_selected_photos: true,
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            loupe_messages: true,
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
             light_theme: LightTheme::Silver,
             favorite_themes: Vec::new(),
             display_profile: String::new(),
+            keyword_chips: KeywordChips::default(),
+            focus_point: false,
+            zoom_to_focus: true,
+            loupe_info: LoupeInfo::default(),
+            lightroom_import: LightroomImport::Ask,
         }
     }
 }
@@ -447,6 +721,12 @@ impl AppSettings {
 /// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
 pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
 
+/// Grid thumbnail size (points): the bottom-bar slider's range, and the `=` / `-` keys' step
+/// (`view.thumbSizeUp` / `view.thumbSizeDown`), about a thirteenth of the range.
+pub const THUMB_SIZE_MIN: f32 = 90.0;
+pub const THUMB_SIZE_MAX: f32 = 480.0;
+pub const THUMB_SIZE_STEP: f32 = 30.0;
+
 /// Width limits of a side panel the user resizes (points).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PanelWidth {
@@ -480,9 +760,26 @@ pub enum KeywordingView {
     WillExport,
 }
 
+/// How the Keywording box lays out the selection's keywords.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeywordChips {
+    /// One chip per keyword, each with its whole path ("Places › Portugal › Lisbon").
+    #[default]
+    Paths,
+    /// Keywords inside the same keyword share a line naming it, and their chips say only what is
+    /// below it; long lists and the suggestions are shortened.
+    Grouped,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
+    /// How large the app's window was and whether it was zoomed, to open it like that again (the
+    /// desktop app; absent until a window has rested at a size). Read leniently: a window that
+    /// is not one reads as none, and never costs the other settings.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "crate::window_place::WindowPlace::lenient")]
+    pub window: Option<crate::window_place::WindowPlace>,
     /// Shared panel arrangement; absent in legacy settings until their first layout.
     pub docking: Option<crate::docking::Workspace>,
     #[serde(default = "crate::i18n::default_language")]
@@ -494,9 +791,16 @@ pub struct UiState {
     /// a later save succeeds).
     #[serde(skip)]
     pub unsaved_seen: bool,
+    /// Help ▸ Debug ▸ Frame Rate (`view.frameRate`): the frame-rate display
+    /// (`crate::frame_rate`). A debugging aid, never saved; `LIGHTCRAFT_FPS=1` starts with it on.
+    #[serde(skip)]
+    pub frame_rate: bool,
     pub view: ViewMode,
     pub left_panel: bool,
     pub right: RightPanel,
+    /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
+    #[serde(skip)]
+    pub right_hidden: RightPanel,
     /// Widths of the left sidebar and of the right panel in points (dragging their inner edge
     /// resizes them; within [`LEFT_WIDTH`] / [`RIGHT_WIDTH`]).
     pub left_width: f32,
@@ -521,7 +825,7 @@ pub struct UiState {
     pub open_sections: Vec<String>,
     /// Open flyouts (curve, mixer, grading…).
     pub open_flyouts: Vec<String>,
-    /// Single-panel mode: opening one section closes the others.
+    /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
     pub show_clipping: bool,
     pub histogram: bool,
@@ -542,13 +846,20 @@ pub struct UiState {
     pub mask_overlay_color: [u8; 3],
     pub mask_overlay_opacity: f32,
     pub mask_pins: bool,
+    /// When the Remove tool's spot pins and the mask pins show (Shift+H cycles). Mask pins also
+    /// need [`mask_pins`](Self::mask_pins).
+    pub tool_overlay: ToolOverlay,
+    /// Masking: show every visible mask's region as one overlay at once (Ctrl+Shift+O / Cmd+Shift+O),
+    /// instead of just the selected mask's ([`mask_overlay`]).
+    pub mask_overlay_all: bool,
     /// The overlay (on, mode) to go back to when Show Luminance Map is turned off.
     #[serde(skip)]
     pub luminance_map_restore: Option<(bool, String)>,
     /// Mirroring of the triangle / spiral crop guides (0..4).
     pub crop_overlay_orient: u8,
     pub crop_overlay: CropOverlay,
-    /// Last explicitly chosen aspect, retained across photos and app launches.
+    /// Last explicitly chosen aspect, retained across photos and app launches; `None` (nothing
+    /// chosen yet) crops locked to the photo's own shape, as Lightroom starts (#991).
     pub crop_default_aspect: Option<serde_json::Value>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·
@@ -570,12 +881,17 @@ pub struct UiState {
     /// The person whose page the People view shows (their faces and the faces that look like them); `None`: everyone.
     #[serde(skip)]
     pub person_page: Option<String>,
-    /// The person page a photo in the loupe was opened from, and that photo: Escape goes back to the page (not the grid).
+    /// The person page a photo in the loupe was opened from (`None`: the People view's unnamed faces), and that photo:
+    /// Escape goes back there (not to the grid).
     #[serde(skip)]
-    pub person_from: Option<(String, u64)>,
+    pub person_from: Option<(Option<String>, u64)>,
     /// The last person page left: the People view offers a way back to it next to its title.
     #[serde(skip)]
     pub last_person: Option<String>,
+    /// Assisted Culling's burst settings last confirmed (gap in seconds, similarity), for this
+    /// session; `None` until the dialog is first confirmed (then 10 s, 0.93).
+    #[serde(skip)]
+    pub cull_burst: Option<(f32, f32)>,
     /// "More" faces the user hid with ×, for this session: (photo, region index).
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
@@ -597,9 +913,20 @@ pub struct UiState {
     pub external_edits: Vec<u64>,
     #[serde(skip)]
     pub was_focused: bool,
-    /// When the watched folder was last scanned (egui time).
+    /// When the watched folder was last scanned (monotonic app time, so a hidden window keeps
+    /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
+    /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
+    /// many were waiting then.
+    #[serde(skip)]
+    pub sidecar_retry_at: f64,
+    #[serde(skip)]
+    pub sidecars_waiting: usize,
+    /// The cards and cameras already seen (volume roots) while Settings → Import → "Show the
+    /// import review when a camera or card is connected" is on; `None` = not looked yet.
+    #[serde(skip)]
+    pub known_cards: Option<Vec<String>>,
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
@@ -607,6 +934,11 @@ pub struct UiState {
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
     pub focus_search: bool,
+    /// Put the cursor in the Keywords panel's Add keyword box (Add Keywords): the egui pass it was
+    /// asked on. A box drawn more than [`FOCUS_KEYWORDS_PASSES`] passes later doesn't take it, so
+    /// a request made while the panel can't show expires.
+    #[serde(skip)]
+    pub focus_keywords: Option<u64>,
     /// A mask being renamed in the Masks list: its id and the edited name.
     #[serde(skip)]
     pub renaming_mask: Option<(u32, String)>,
@@ -618,7 +950,7 @@ pub struct UiState {
     #[serde(skip)]
     pub sam_downloading: bool,
     /// When to start the zoomed-in detail pass of an AI mask (app time) and which mask: set by
-    /// each click or description, so the pass runs once the clicking stops.
+    /// each click or description, so the pass runs once the clicking stops (monotonic app time).
     #[serde(skip)]
     pub detail_due: Option<(f64, u32)>,
     /// A mask component being renamed inline: (mask id, component index, name).
@@ -635,6 +967,10 @@ pub struct UiState {
     /// A keyword just made from the sidebar: Keywords opens down to it, once.
     #[serde(skip)]
     pub reveal_keyword: Option<String>,
+    /// A folder Photo ▸ Show in Folders went to (its Folders row's path): the sidebar's Folders
+    /// section opens down to it and scrolls to it, once.
+    #[serde(skip)]
+    pub reveal_folder: Option<String>,
     /// An album or folder row being dragged in the sidebar (dropped on a folder to move it there).
     #[serde(skip)]
     pub dragging_album: Option<u64>,
@@ -653,12 +989,18 @@ pub struct UiState {
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
     pub tool: String,
+    /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
+    /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
+    #[serde(skip)]
+    pub selected_guide: Option<(u64, usize)>,
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
     pub brush_erase: bool,
     /// Brush Auto Mask: dabs stick to areas like the one under the brush centre.
     pub brush_auto_mask: bool,
+    /// Brush Pen Pressure: a pen's pressure scales each dab's size and flow (a mouse paints at full pressure).
+    pub brush_pressure: bool,
     /// Remove tool brush: size (fraction of the long edge), feather and opacity (0..100).
     pub remove_size: f32,
     pub remove_feather: f32,
@@ -698,6 +1040,14 @@ pub struct UiState {
     pub keyword_painter: Option<String>,
     /// What the Keywording box shows (Lightroom Classic's Keyword Tags views).
     pub keywording_view: KeywordingView,
+    /// The Keywording box, grouped: every keyword of this selection (its hash) is shown, however
+    /// many lines that takes ("+N more" was clicked). Another selection's list is short again.
+    #[serde(skip)]
+    pub keyword_chips_all: Option<u64>,
+    /// Sections of the right panel folded shut by a click on their title (`keywording`,
+    /// `keywordList`); the others are open.
+    #[serde(deserialize_with = "lenient_ids")]
+    pub folded_sections: Vec<String>,
     /// The Keyword List's open levels (lower-case paths).
     pub keyword_list_open: Vec<String>,
     /// The keyword picked in the Keyword List (− deletes it, Edit edits it).
@@ -706,12 +1056,16 @@ pub struct UiState {
     /// A keyword being dragged in the Keyword List (onto another to nest it).
     #[serde(skip)]
     pub dragging_keyword: Option<String>,
-    /// A running slideshow (full screen): seconds per photo, when the next one is due (egui
-    /// time), paused.
+    /// A running slideshow (full screen; see [`crate::panels::slideshow`]).
     #[serde(skip)]
-    pub slideshow: Option<(f64, f64, bool)>,
+    pub slideshow: Option<Box<crate::panels::slideshow::Run>>,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
+    /// When the loupe last changed photo (View Options' Show Briefly When Photo Changes).
+    #[serde(skip)]
+    pub brief_info: BriefInfo,
+    /// The loupe's layout image overlay (View ▸ Loupe Overlay).
+    pub layout_image: LayoutImage,
     /// Navigator mini map in the loupe while zoomed in.
     pub navigator: bool,
     /// App preferences (Settings dialog).
@@ -731,10 +1085,24 @@ pub struct UiState {
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
+    /// The outcome (success or error) of the last Find Missing Photos task.
+    #[serde(skip)]
+    pub last_find_missing_result: Option<Result<serde_json::Value, String>>,
+    /// Injected delay for Find Missing Photos worker (test-only, for timeout testing).
+    #[cfg(test)]
+    #[serde(skip)]
+    pub find_missing_test_delay: Option<std::time::Duration>,
+    /// The library (its `Session::library_generation`) whose preview-only raws were rechecked
+    /// (`crate::recheck`).
+    #[serde(skip)]
+    pub rechecked_library: Option<u64>,
     #[serde(skip)]
     pub status: String,
     #[serde(skip)]
     pub dialog: Option<Dialog>,
+    /// The Print dialog's page, selection and drag.
+    #[serde(skip)]
+    pub print: crate::print_view::PrintUi,
 }
 
 /// Settings group ids (`SettingsGroup` serde names) a new preset includes by default: everything
@@ -763,15 +1131,32 @@ pub struct NameEdit {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Dialog {
+    /// A Lightroom import result stays readable after its activity row disappears.
+    LightroomResult {
+        summary: String,
+        library: Option<String>,
+        details: Vec<String>,
+        first: Option<u64>,
+    },
+    /// File ▸ Print…: the Print module. Its state is the session's (`print.*`); the page on show
+    /// and the selected cell are [`UiState::print`].
+    Print,
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },
-    /// `parent`: the folder to create it in (none: the top level).
+    /// View ▸ Export Slideshow…: format, size, quality, frame rate, container.
+    SlideshowExport {
+        settings: lightcraft_engine::slideshow_export::ExportSettings,
+    },
+    /// `parent`: the folder to create it in (none: the top level). `include_selected`: the new album
+    /// holds the selected photos (Lightroom's "Include selected photos"; folders hold none).
     NewAlbum {
         name: String,
         folder: bool,
         #[serde(default)]
         parent: Option<u64>,
+        #[serde(default = "yes")]
+        include_selected: bool,
     },
     RenameAlbum {
         id: u64,
@@ -816,6 +1201,13 @@ pub enum Dialog {
     RenameKeyword {
         from: String,
         to: String,
+    },
+    /// Rename every face of `from` to `to`. `merge` is the user's yes to combining with the person
+    /// `to` already names.
+    RenamePerson {
+        from: String,
+        to: String,
+        merge: bool,
     },
     /// Create a keyword, or edit one (`editing`): Lightroom Classic's Create / Edit Keyword Tag.
     KeywordTag {
@@ -879,10 +1271,13 @@ pub enum Dialog {
     /// Help ▸ What's New.
     WhatsNew,
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
-    /// of each burst.
+    /// of each burst; shots at most `burst_gap` seconds apart and at least `similarity` alike are
+    /// a burst.
     Cull {
         reject_below: f32,
         pick_best: bool,
+        burst_gap: f32,
+        similarity: f32,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
@@ -963,9 +1358,65 @@ pub enum Dialog {
         folder: String,
         catalog: Option<String>,
     },
+    /// File ▸ Import Lightroom Catalog…: where the catalog at `catalog` goes (issue #2672, see
+    /// [`crate::lightroom_destination`]). Merge into the open library `library` (`photos` in it), or
+    /// (`new_library`) create the library `name` in the folder `location`, switch to it and import
+    /// there. `dont_ask`: merge from now on without asking. `generation`: the library the window
+    /// was opened for (`Session::library_generation`): another one opened meanwhile isn't merged into.
+    LightroomDestination {
+        /// The `.lrcat` file.
+        catalog: String,
+        /// The open library's name (its folder's name).
+        library: String,
+        /// The photos in the open library.
+        photos: usize,
+        /// "Create a new library" is chosen (else "Merge into the open library").
+        new_library: bool,
+        /// The new library's name (prefilled from the catalog's file name).
+        name: String,
+        /// The folder the new library goes in (prefilled with the open library's parent folder).
+        location: String,
+        /// "Don't ask again (always merge into the open library)".
+        dont_ask: bool,
+        /// `Session::library_generation` when the window opened.
+        generation: u64,
+    },
+    /// Save the selected mask's sliders as a mask effect preset: which sliders (`FIELDS` names,
+    /// the colour as `color_sat`), whether it carries Amount and the brush settings.
+    SaveEffect {
+        name: String,
+        group: String,
+        fields: Vec<String>,
+        amount: bool,
+        brush: bool,
+    },
+    /// Manage Effect Presets: search, the selected effects, an inline rename (old, new),
+    /// a delete waiting for confirmation, a new group's name being typed.
+    ManageEffects {
+        search: String,
+        selected: Vec<String>,
+        rename: Option<(String, String)>,
+        confirm_delete: bool,
+        new_group: String,
+    },
+    /// Confirm deleting mask effect presets.
+    DeleteEffects {
+        names: Vec<String>,
+    },
     /// Confirm moving photos to Recently Deleted.
     ConfirmDelete {
         count: usize,
+    },
+    /// Confirm moving photos dropped on a Folders row into that folder on disk
+    /// (`photo.moveToFolder`). `name`: the folder's name, as the question says it.
+    MovePhotos {
+        ids: Vec<u64>,
+        folder: String,
+        name: String,
+        dont_ask: bool,
+        /// The library the photos were dropped in (`Session::library_generation`): ids are
+        /// numbered per library, so in another one they name other photos.
+        library: u64,
     },
     /// Confirm taking a folder's photos out of the library (`library.removeFolder`).
     RemoveFolder {
@@ -995,6 +1446,9 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
+    /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
+    /// as they are made.
+    ViewOptions,
 }
 
 fn yes() -> bool {
@@ -1017,19 +1471,30 @@ pub struct SyncCounts {
     pub moved: usize,
 }
 
+impl SyncCounts {
+    /// The folder is there and the scan found nothing to bring in, relink, remove or read: the
+    /// dialog only says so (files it skipped are not changes).
+    pub fn up_to_date(&self) -> bool {
+        !self.offline && self.new + self.moved + self.missing + self.metadata == 0
+    }
+}
+
 impl Default for UiState {
     fn default() -> Self {
         UiState {
+            window: None,
             docking: None,
             language: crate::i18n::default_language(),
             preview_build_seen: None,
             unsaved_seen: false,
+            frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
             luminance_map_restore: None,
             view: ViewMode::Detail,
             left_panel: false,
             left_width: LEFT_WIDTH.default,
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,
+            right_hidden: RightPanel::None,
             presets: false,
             preset_thumbs: false,
             filmstrip: true,
@@ -1054,6 +1519,8 @@ impl Default for UiState {
             mask_overlay_color: [230, 30, 40],
             mask_overlay_opacity: 50.0,
             mask_pins: true,
+            tool_overlay: ToolOverlay::Auto,
+            mask_overlay_all: false,
             crop_overlay: CropOverlay::Thirds,
             crop_default_aspect: None,
             crop_overlay_orient: 0,
@@ -1067,6 +1534,7 @@ impl Default for UiState {
             person_page: None,
             person_from: None,
             last_person: None,
+            cull_burst: None,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),
@@ -1077,8 +1545,12 @@ impl Default for UiState {
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
+            sidecar_retry_at: 0.0,
+            sidecars_waiting: 0,
+            known_cards: None,
             search: String::new(),
             focus_search: false,
+            focus_keywords: None,
             renaming_mask: None,
             describe: None,
             detail_due: None,
@@ -1088,6 +1560,7 @@ impl Default for UiState {
             dragging_photos: None,
             reveal_album: None,
             reveal_keyword: None,
+            reveal_folder: None,
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),
@@ -1095,11 +1568,13 @@ impl Default for UiState {
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
+            selected_guide: None,
             brush_size: 0.04,
             brush_feather: 50.0,
             brush_flow: 60.0,
             brush_erase: false,
             brush_auto_mask: false,
+            brush_pressure: true,
             remove_size: 0.02,
             remove_feather: 50.0,
             remove_opacity: 100.0,
@@ -1117,10 +1592,14 @@ impl Default for UiState {
             second_window: false,
             keyword_painter: None,
             keywording_view: KeywordingView::default(),
+            keyword_chips_all: None,
+            folded_sections: Vec::new(),
             keyword_list_open: Vec::new(),
             keyword_list_selected: None,
             dragging_keyword: None,
             info_overlay: InfoOverlay::Off,
+            brief_info: BriefInfo::default(),
+            layout_image: LayoutImage::default(),
             navigator: true,
             settings: AppSettings::default(),
             window_fullscreen: None,
@@ -1131,8 +1610,13 @@ impl Default for UiState {
             reference: None,
             toast: None,
             last_find_missing: None,
+            last_find_missing_result: None,
+            #[cfg(test)]
+            find_missing_test_delay: None,
+            rechecked_library: None,
             status: String::new(),
             dialog: None,
+            print: Default::default(),
         }
     }
 }
@@ -1155,17 +1639,41 @@ impl UiState {
         self.grading_hidden = h.iter().any(|x| *x).then_some((photo, h));
     }
 
+    /// A right-panel section that folds by its title is folded shut.
+    pub fn section_folded(&self, id: &str) -> bool {
+        self.folded_sections.iter().any(|s| s == id)
+    }
+    pub fn toggle_folded(&mut self, id: &str) {
+        if self.section_folded(id) {
+            self.folded_sections.retain(|s| s != id);
+        } else {
+            self.folded_sections.push(id.to_string());
+        }
+    }
+
     pub fn section_open(&self, id: &str) -> bool {
         self.open_sections.iter().any(|s| s == id)
     }
     pub fn toggle_section(&mut self, id: &str) {
         if self.section_open(id) {
             self.open_sections.retain(|s| s != id);
+        } else if self.single_panel {
+            self.solo_section(id);
         } else {
-            if self.single_panel {
-                self.open_sections.clear();
-            }
             self.open_sections.push(id.to_string());
+        }
+    }
+    /// Opens `id` and closes every other Edit section (⌥-click on a section header).
+    pub fn solo_section(&mut self, id: &str) {
+        self.open_sections.clear();
+        self.open_sections.push(id.to_string());
+    }
+    /// Turns Solo Mode on or off. Turning it on keeps only the section opened last.
+    pub fn set_single_panel(&mut self, on: bool) {
+        self.single_panel = on;
+        if on {
+            let keep = self.open_sections.len().saturating_sub(1);
+            self.open_sections.drain(..keep);
         }
     }
     /// Whether the sidebar section with this id is folded shut (an unknown id: no).
@@ -1184,7 +1692,7 @@ impl UiState {
     }
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
-        self.thumb_size = self.thumb_size.clamp(90.0, 480.0);
+        self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
@@ -1203,6 +1711,19 @@ impl UiState {
     }
 }
 
+/// A setting read leniently: a value that isn't one of its own (a hand-edited file, a newer
+/// build's choice) is the default, and the rest of the settings file is still read.
+fn lenient<'de, D: serde::Deserializer<'de>, T: Default + serde::de::DeserializeOwned>(d: D) -> Result<T, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// A list of ids read leniently: what isn't a list is none, and what isn't text in it is left out.
+fn lenient_ids<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect())
+}
+
 fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let values = Vec::<String>::deserialize(d)?;
     let mut seen = std::collections::BTreeSet::new();
@@ -1212,4 +1733,49 @@ fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result
         }
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod loupe_info_tests {
+    use super::*;
+
+    /// The lines chosen in View Options are saved with the app's settings; a settings file from
+    /// before they existed, or with a line this build doesn't know, gets the default lines and
+    /// keeps the rest of its settings.
+    #[test]
+    fn view_options_lines_are_saved_with_the_settings() {
+        let mut settings = AppSettings::default();
+        settings.loupe_info.info2 = [LoupeInfoField::Lens, LoupeInfoField::None, LoupeInfoField::FileName];
+        settings.loupe_info.briefly = InfoOverlay::Exposure;
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["loupeInfo"]["info2"], serde_json::json!(["lens", "none", "fileName"]));
+        assert_eq!(saved["loupeInfo"]["briefly"], "exposure");
+        let read: AppSettings = serde_json::from_value(saved).unwrap();
+        assert_eq!(read.loupe_info, settings.loupe_info);
+
+        let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert_eq!(old.loupe_info, LoupeInfo::default());
+        // lines saved before Show Briefly When Photo Changes existed are kept, with it off
+        let lines: AppSettings = serde_json::from_value(serde_json::json!({"loupeInfo": {"info2": ["lens", "none", "fileName"]}})).unwrap();
+        assert_eq!(lines.loupe_info.info2, settings.loupe_info.info2);
+        assert_eq!(lines.loupe_info.briefly, InfoOverlay::Off);
+        let newer: AppSettings =
+            serde_json::from_value(serde_json::json!({"filmNames": false, "loupeInfo": {"info1": ["rating", "fileName", "none"]}})).unwrap();
+        assert_eq!(newer.loupe_info, LoupeInfo::default());
+        assert!(!newer.film_names, "the rest of the settings are still read");
+    }
+
+    /// Show message when loading or rendering photos is on until it is turned off, and is saved
+    /// with the app's settings.
+    #[test]
+    fn the_loading_message_choice_is_saved_with_the_settings() {
+        assert!(AppSettings::default().loupe_messages);
+        let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert!(old.loupe_messages, "a settings file from before the choice existed keeps the message");
+        let settings = AppSettings { loupe_messages: false, ..AppSettings::default() };
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["loupeMessages"], false);
+        let read: AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(!read.loupe_messages);
+    }
 }

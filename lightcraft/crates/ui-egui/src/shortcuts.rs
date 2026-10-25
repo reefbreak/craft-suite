@@ -54,13 +54,28 @@ pub fn find_bindable(id: &str) -> Option<&'static Bindable> {
 
 /// The shortcut `id` has now: the user's choice (`""` = none), else the declared one. An entry
 /// that doesn't parse (a hand-edited `ui.json`, a modifier-only key saved by an older build) is
-/// ignored.
+/// ignored. The declared shortcut yields to a saved entry that gives its key to another known
+/// command other than its contextual partner.
 pub fn binding<'a>(keymap: &'a Keymap, id: &str, default: Option<&'a str>) -> Option<&'a str> {
     match keymap.get(id) {
         Some(sc) if sc.is_empty() => None,
         Some(sc) if parse(sc).is_some() => Some(sc.as_str()),
-        _ => default,
+        _ => default.filter(|sc| !assigned_elsewhere(keymap, id, sc)),
     }
+}
+
+/// Whether the keymap gives the key `sc` to a known command other than `id` and its contextual
+/// partner.
+fn assigned_elsewhere(keymap: &Keymap, id: &str, sc: &str) -> bool {
+    let Some(key) = parse(sc) else { return false };
+    saved_keys(keymap)
+        .any(|(other, k)| other != id && k == key && !CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == other) || (*y == id && *x == other)))
+}
+
+/// The keys the keymap gives to known commands, with each command's id. Entries for commands this
+/// build doesn't know and entries that don't parse are ignored.
+pub(crate) fn saved_keys(keymap: &Keymap) -> impl Iterator<Item = (&str, (Modifiers, Key))> {
+    keymap.iter().filter(|(id, _)| find_bindable(id).is_some()).filter_map(|(id, sc)| Some((id.as_str(), parse(sc)?)))
 }
 
 /// The effective shortcut of command `id` (`None` for unknown commands).
@@ -68,8 +83,10 @@ pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
     find_bindable(id).and_then(|b| binding(keymap, id, b.default))
 }
 
-/// Engine commands that intentionally share a key and are disambiguated by context in [`handle`].
-pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect")];
+/// Engine commands that intentionally share a key and are disambiguated by context in [`handle`]:
+/// the X pair by the Crop panel, A by whether it is open (Visualize Spots everywhere, the aspect
+/// lock under the Crop panel).
+pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect"), ("view.visualizeSpots", "crop.lockAspect")];
 
 /// Commands other than `id` whose shortcut is the key `sc` (contextual partners excepted).
 pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
@@ -168,6 +185,7 @@ pub fn format(m: Modifiers, k: Key) -> Option<String> {
         Key::CloseBracket => "]",
         Key::Quote => "'",
         Key::Comma => ",",
+        Key::Backtick => "`",
         k => k.name(),
     };
     let mut s = String::new();
@@ -198,7 +216,16 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("Shift+E", "dialog.export", "{}"),
     ("Cmd+E", "app.exportPrevious", "{}"),
     ("Space", "view.zoomToggle", "{}"),
+    // Lightroom Classic: F6 toggles the filmstrip, F7 the left library panel.
+    // Keep existing primary shortcuts and honour custom keymap assignments.
+    ("F6", "view.filmstrip", "{}"),
+    ("F7", "view.leftPanel", "{}"),
+    // and F8 the right panel
+    ("F8", "view.rightPanel", "{}"),
     ("Shift+M", "version.create", "{}"),
+    // grid thumbnail size: Classic's key is `=`; `+` (keypad, or Shift+= reported as Plus) agrees
+    ("Plus", "view.thumbSizeUp", "{}"),
+    ("Shift+Plus", "view.thumbSizeUp", "{}"),
     ("Shift+X", "photo.flag", r#"{"flag": "reject", "advance": true}"#),
     ("Shift+Z", "photo.flag", r#"{"flag": "pick", "advance": true}"#),
     ("Shift+U", "photo.flag", r#"{"flag": "none", "advance": true}"#),
@@ -289,12 +316,16 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
     })
 }
 
-/// Default brackets rate in grids. Remapped brush keys retain their brush action, and a
-/// saved assignment of either bracket to another command takes precedence over this default.
-fn grid_bracket_command(keymap: &Keymap, grid: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
+/// Default brackets rate in grids, and the default backslash shows / hides the Filter Bar there
+/// (Lightroom Classic's Library keys; Detail keeps brush size and Show Original). The full-screen
+/// preview keeps the grid's view but shows the photo alone, so backslash stays Show Original there.
+/// Remapped brush and Show Original keys retain their action, and a saved assignment of the key to
+/// another command takes precedence over this default.
+fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
     let command = match (grid, id, shortcut) {
         (true, "brush.smaller", (m, Key::OpenBracket)) if m == Modifiers::NONE => "photo.decreaseRating",
         (true, "brush.larger", (m, Key::CloseBracket)) if m == Modifiers::NONE => "photo.increaseRating",
+        (true, "view.showOriginal", (m, Key::Backslash)) if m == Modifiers::NONE && !fullscreen => "view.filterBar",
         _ => return Some(id),
     };
     if keymap.iter().any(|(other, sc)| other != id && find_bindable(other).is_some() && parse(sc) == Some(shortcut)) { None } else { Some(command) }
@@ -312,11 +343,16 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     if crate::widgets::slider_has_focus(ctx) {
         return ctx.input(|input| [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown].iter().any(|key| input.key_pressed(*key)));
     }
-    let chrome = app
-        .ui
-        .docking
-        .as_ref()
-        .is_some_and(|workspace| craft_ui::docking::DockArea::new(egui::Id::new("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout));
+    // a handle on the photo keeps the arrows (it moves) and Return / Space (it acts)
+    if crate::canvas_keys::has_focus(ctx) {
+        return ctx.input(|input| {
+            [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Space].iter().any(|key| input.key_pressed(*key))
+        });
+    }
+    let chrome =
+        app.ui.docking.as_ref().is_some_and(|workspace| {
+            craft_ui::docking::DockArea::new(egui::Id::unique("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout)
+        });
     if !chrome {
         return true;
     }
@@ -327,12 +363,23 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     })
 }
 
+/// Dispatch the global shortcut pass. It yields while a dialog, prompt, blocking library window,
+/// text field, name edit or shortcut recording owns input, then fires saved command bindings,
+/// aliases and fixed photo keys, respecting native menu ownership and open popups.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
         app.recording_shortcut = None;
     }
-    // Dialogs own their keys (including Esc and text editing); background photo actions wait.
-    if app.ui.dialog.is_some() {
+    // Dialogs own their keys (including Esc and text editing); background photo actions wait. A
+    // quit prompt or settings notice owns every key too: its Foreground dim only blocks the
+    // pointer, so without this a rating or navigation shortcut would still act behind it. The
+    // blocking library window (error or launch list) owns all app shortcuts for every settled
+    // frame, not only its shield pass; its own list keys are consumed earlier by
+    // `library_problem::logic`, and its buttons remain reachable through the control channel.
+    if app.ui.dialog.is_some() || crate::panels::notices::blocks_input(app) || crate::panels::library_problem::blocks_dialog_input(app) {
+        return;
+    }
+    if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
         return;
     }
     // don't steal keys from text fields or from the keymap editor recording a shortcut
@@ -345,21 +392,34 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mut aliased: Vec<(&str, serde_json::Value)> = Vec::new();
     let keymap = &app.ui.settings.keymap;
     let grid = library_grid(app);
-    // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them
-    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
+    // The grid navigation keys act on the photos in view, so they wait while the full-screen preview
+    // covers the grid: a key must not move the selection onto photos nobody can see.
+    let grid_navigation = grid && !app.ui.fullscreen;
+    // keys the user gave to a known command: the fixed bindings below (aliases, ratings) yield to them
+    let taken: Vec<(Modifiers, Key)> = saved_keys(keymap).map(|(_, k)| k).collect();
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
     let popup_open = popup_open || app.text_focus;
     ctx.input(|i| {
+        // Enter opens the active grid photo; widgets, popups and custom bindings keep the key.
+        if grid
+            && app.session.active().is_some()
+            && !popup_open
+            && !native("Enter")
+            && !taken.contains(&(Modifiers::NONE, Key::Enter))
+            && matches(i, Modifiers::NONE, Key::Enter)
+        {
+            fire.push("view.detail".to_string());
+        }
         for b in bindable() {
             if let Some(sc) = binding(keymap, b.id, b.default)
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
-                && let Some(id) = grid_bracket_command(keymap, grid, b.id, (m, k))
+                && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 fire.push(id.to_string());
             }
@@ -387,25 +447,38 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 fire.push(format!("label:{label}"));
             }
         }
+        if grid_navigation {
+            // Home / End: the first / last photo of the view
+            for (key, id) in [(Key::Home, "grid:first"), (Key::End, "grid:last")] {
+                if matches(i, Modifiers::NONE, key) && !taken.contains(&(Modifiers::NONE, key)) {
+                    fire.push(id.to_string());
+                }
+            }
+            // Shift+← / Shift+→: the previous / next photo of the view joins the selection
+            for (key, step) in [(Key::ArrowLeft, -1i64), (Key::ArrowRight, 1)] {
+                if matches(i, Modifiers::SHIFT, key) && !taken.contains(&(Modifiers::SHIFT, key)) {
+                    fire.push(format!("grid:extend:{step}"));
+                }
+            }
+        }
     });
     use crate::panels::compare;
     // rating/flag/label keys: in Compare/Survey they act on the active photo only; Shift+key or
     // Auto Advance then moves on (next candidate in Compare, next photo elsewhere)
     let cull = |app: &mut LightcraftApp, id: &str, mut params: serde_json::Value, advance: bool| {
         compare::target_active(app, &mut params);
+        let was = app.session.active();
         let ok = app.run(id, params).is_ok();
         if ok && (advance || app.ui.auto_advance) {
-            compare::advance(app);
+            compare::advance(app, was);
         }
     };
     for (id, params) in aliased {
-        // Space pauses / resumes a slideshow
-        if id == "view.zoomToggle"
-            && let Some((interval, _, paused)) = app.ui.slideshow
-        {
-            let now = ctx.input(|i| i.time);
-            app.ui.slideshow = Some((interval, now + interval, !paused));
-            app.toast(ctx, if paused { "Slideshow resumed" } else { "Slideshow paused" });
+        // a slideshow: Space pauses / resumes
+        if id == "view.zoomToggle" && app.ui.slideshow.is_some() {
+            if let Ok(v) = app.run("slideshow.togglePause", json!({})) {
+                app.toast(ctx, crate::i18n::tr(if v["paused"] == true { "Slideshow paused" } else { "Slideshow resumed" }));
+            }
             continue;
         }
         // flag/rate aliases (Shift+X…) go through the culling path: active photo in Compare/Survey,
@@ -424,7 +497,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             app.toast(ctx, e);
         }
     }
+    let rotate_fires = fire.iter().any(|f| f == "crop.rotateAspect");
     for f in fire {
+        // a slideshow: ←/→ step (a cut)
+        if app.ui.slideshow.is_some() && matches!(f.as_str(), "library.next" | "library.previous") {
+            let _ = app.run(if f == "library.next" { "slideshow.next" } else { "slideshow.previous" }, json!({}));
+            continue;
+        }
         if let Some(rest) = f.strip_prefix("rate:") {
             let (n, adv) = rest.split_once(':').unwrap_or(("0", "0"));
             cull(app, "photo.rate", json!({"rating": n.parse::<u8>().unwrap_or(0)}), adv == "1");
@@ -444,9 +523,43 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         } else if f == "view.softProof" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
             // S in a grid: expand / collapse the stack (Lightroom's Library binding)
             let _ = app.run("stack.toggle", json!({}));
+        } else if f == "grid:first" || f == "grid:last" {
+            // Home / End in a grid: make the first / last photo of the view the active, selected one
+            let vis = app.session.visible_cloned();
+            let edge = if f == "grid:first" { vis.first() } else { vis.last() };
+            if let Some(id) = edge {
+                let _ = app.run("library.select", json!({"ids": [id.0], "active": id.0}));
+            }
+        } else if let Some(step) = f.strip_prefix("grid:extend:") {
+            // Shift+← / Shift+→ in a grid: the neighbour of the active photo joins the selection and
+            // becomes the active one. At either end of the view the key does nothing.
+            let step = step.parse::<i64>().unwrap_or(0);
+            let vis = app.session.visible_cloned();
+            let neighbour = app
+                .session
+                .active()
+                .and_then(|active| vis.iter().position(|p| *p == active))
+                .and_then(|pos| i64::try_from(pos).ok())
+                .and_then(|pos| pos.checked_add(step))
+                .and_then(|pos| usize::try_from(pos).ok())
+                .and_then(|pos| vis.get(pos));
+            if let Some(id) = neighbour {
+                let _ = app.run("library.select", json!({"ids": [id.0], "mode": "add"}));
+            }
         } else if compare::culling(app) && (f == "library.next" || f == "library.previous") {
             let d = if f == "library.next" { 1 } else { -1 };
             let _ = if app.ui.view == crate::state::ViewMode::Compare { compare::compare_step(app, d) } else { compare::survey_step(app, d) };
+        } else if matches!(f.as_str(), "photo.cycleFlag" | "photo.increaseFlag" | "photo.decreaseFlag") {
+            // `, ⌘↑, ⌘↓: step the flag; the toast names the active photo's new state (read before Auto Advance moves on)
+            let active = app.session.active();
+            cull(app, &f, json!({}), false);
+            let flag = active.and_then(|id| app.session.catalog.photo(id)).map(|p| p.flag);
+            match flag {
+                Some(lightcraft_catalog::Flag::Pick) => app.toast(ctx, crate::i18n::tr("Flagged as Pick")),
+                Some(lightcraft_catalog::Flag::Reject) => app.toast(ctx, crate::i18n::tr("Flagged as Reject")),
+                Some(lightcraft_catalog::Flag::None) => app.toast(ctx, crate::i18n::tr("Unflagged")),
+                None => {}
+            }
         } else if matches!(f.as_str(), "photo.pick" | "photo.reject" | "photo.unflag") && app.ui.right != crate::state::RightPanel::Crop {
             cull(app, &f, json!({}), false);
             match f.as_str() {
@@ -477,8 +590,29 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                         }
                         continue;
                     }
+                    R::Crop if app.ui.tool == "guidedUpright" => {
+                        // Delete removes the selected guide alone; with none selected it removes
+                        // nothing (the photo itself is never deleted while the tool is open)
+                        if let (Some((photo, i)), Some(active)) = (app.ui.selected_guide, app.session.active()) {
+                            if photo == active.0
+                                && let Some(d) = app.session.develop_of(active)
+                                && i < d.geometry.guides.len()
+                            {
+                                let guides: Vec<[f64; 4]> =
+                                    d.geometry.guides.iter().enumerate().filter(|(k, _)| *k != i).map(|(_, (a, b))| [a.x, a.y, b.x, b.y]).collect();
+                                let _ = app.run("geometry.guides", json!({"guides": guides}));
+                            }
+                            app.ui.selected_guide = None;
+                        }
+                        continue;
+                    }
                     R::RedEye => continue,
                     _ => {}
+                }
+                // in an album, Delete takes the photos out of the album only, as in Lightroom: they
+                // stay in the library and their folder (issue #1805)
+                if crate::menus::delete_in_album(app, ctx) {
+                    continue;
                 }
                 if crate::menus::confirm_delete(app) {
                     continue;
@@ -487,7 +621,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             // B: the brush while editing; in the grids, add to the target album (Quick Collection)
             if f == "tool.brush" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
                 if let Ok(r) = app.run("album.toggleTarget", json!({})) {
-                    let n = app.session.targets(&json!({})).len();
+                    let n = app.session.selected().len();
                     let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
                     let name = r["name"].as_str().unwrap_or("Quick Collection").to_string();
                     app.toast(
@@ -501,12 +635,22 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 continue;
             }
-            // X is both reject (library) and swap crop aspect (crop tool)
+            // X is both reject (library) and swap crop aspect (crop tool). When both bindings fire,
+            // swap once: twice would put the crop straight back (issue #1866).
             if f == "photo.reject" && app.ui.right == crate::state::RightPanel::Crop {
-                let _ = app.run("crop.rotateAspect", json!({}));
+                if !rotate_fires {
+                    let _ = app.run("crop.rotateAspect", json!({}));
+                }
                 continue;
             }
             if f == "crop.rotateAspect" && app.ui.right != crate::state::RightPanel::Crop {
+                continue;
+            }
+            // A is both Visualize Spots and the crop aspect lock: each key only in its own context
+            if f == "view.visualizeSpots" && app.ui.right == crate::state::RightPanel::Crop {
+                continue;
+            }
+            if f == "crop.lockAspect" && app.ui.right != crate::state::RightPanel::Crop {
                 continue;
             }
             // / refreshes the selected spot's source in the Remove tool (the filmstrip elsewhere)
@@ -519,18 +663,36 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let _ = app.run("view.maskOverlayColor", json!({}));
                 continue;
             }
-            // while cropping: O cycles the guides, Shift+O their orientation, A locks the aspect
+            // while cropping: O cycles the guides, Shift+O their orientation
             if app.ui.right == crate::state::RightPanel::Crop {
                 let crop_key = match f.as_str() {
                     "view.maskOverlay" => Some(("view.cropOverlay", json!({}))),
                     "view.cropOverlay" => Some(("view.cropOverlayOrientation", json!({}))),
-                    "view.visualizeSpots" => Some(("crop.aspect", json!({"aspect": "toggle"}))),
                     _ => None,
                 };
                 if let Some((cmd, p)) = crop_key {
                     let _ = app.run(cmd, p);
                     continue;
                 }
+            }
+            // Up / Down in the grids go to the cell above / below (the filmstrip steps one photo)
+            if matches!(f.as_str(), "library.up" | "library.down") {
+                // over a slider the arrows nudge it (widgets::slider takes the key)
+                let over_slider =
+                    ctx.pointer_hover_pos().is_some_and(|p| app.widgets.iter().any(|(id, r)| id.starts_with("slider:") && r.contains(p)));
+                if over_slider {
+                    continue;
+                }
+                match crate::panels::grid::row_distance(app, f == "library.down") {
+                    Some(0) => {}
+                    Some(rows) => {
+                        let _ = app.run(&f, json!({"rows": rows}));
+                    }
+                    None => {
+                        let _ = app.run(&f, json!({}));
+                    }
+                }
+                continue;
             }
             // an export that can't start (e.g. no folder) says why instead of doing nothing
             if let Err(e) = app.run(&f, json!({}))
@@ -588,6 +750,74 @@ mod tests {
         assert_eq!(r["ok"], true, "{r}");
     }
 
+    /// Press the default Select Only Active Photo chord (the command key on every platform).
+    fn select_only_active_chord(h: &mut crate::headless::Headless) {
+        let r = h.request("ui.key", json!({"key": "D", "cmd": true, "shift": true}), std::time::Duration::from_secs(20));
+        assert_eq!(r["ok"], true, "{r}");
+    }
+
+    #[test]
+    fn select_only_active_keeps_the_active_photo_and_the_edit_undo_step() {
+        use crate::state::ViewMode;
+        use lightcraft_catalog::PhotoId;
+        for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail] {
+            let mut h = library();
+            h.app.ui.view = view;
+            h.app.session.execute("library.select", &json!({"ids": [1, 2, 3], "active": 2})).unwrap();
+            h.app.session.execute("photo.rate", &json!({"rating": 4})).unwrap();
+            select_only_active_chord(&mut h);
+            assert_eq!(h.app.session.selection.ids, vec![PhotoId(2)]);
+            assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+            // Narrowing the selection does not replace the last photo-edit undo step.
+            h.app.session.execute("edit.undo", &json!({})).unwrap();
+            for id in 1..=3 {
+                assert_eq!(h.app.session.catalog.photo(PhotoId(id)).unwrap().rating, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn select_only_active_yields_to_a_focused_text_field() {
+        use lightcraft_catalog::PhotoId;
+        let mut h = library();
+        h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 2})).unwrap();
+        let r = h.request("ui.clickWidget", json!({"id": "field:search"}), std::time::Duration::from_secs(20));
+        assert_eq!(r["ok"], true, "{r}");
+        select_only_active_chord(&mut h);
+        assert_eq!(h.app.session.selection.ids, vec![PhotoId(1), PhotoId(2)]);
+        assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+    }
+
+    #[test]
+    fn select_only_active_follows_the_keymap() {
+        use lightcraft_catalog::PhotoId;
+        let mut h = library();
+        let both = vec![PhotoId(1), PhotoId(2)];
+        h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 2})).unwrap();
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "library.selectOnlyActive"), Some("Cmd+Shift+D"));
+        // unbound: the default chord does nothing
+        super::assign(&mut h.app.ui.settings.keymap, "library.selectOnlyActive", None).unwrap();
+        select_only_active_chord(&mut h);
+        assert_eq!(h.app.session.selection.ids, both);
+        // rebound: the new key narrows the selection and the old chord still does not
+        super::assign(&mut h.app.ui.settings.keymap, "library.selectOnlyActive", Some("F9")).unwrap();
+        select_only_active_chord(&mut h);
+        assert_eq!(h.app.session.selection.ids, both);
+        key(&mut h, "F9", false);
+        assert_eq!(h.app.session.selection.ids, vec![PhotoId(2)]);
+    }
+
+    #[test]
+    fn select_only_active_without_active_photo_does_not_change_selection() {
+        let mut h = library();
+        // Deselect All keeps the active photo selected, so clear the whole selection state instead.
+        h.app.session.selection = Default::default();
+        assert!(!crate::menus::ui_enabled(&h.app, "library.selectOnlyActive"));
+        assert!(h.app.run("library.selectOnlyActive", json!({})).is_err());
+        select_only_active_chord(&mut h);
+        assert!(h.app.session.selection.ids.is_empty());
+    }
+
     #[test]
     fn library_rating_labels_flags_and_undo() {
         use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
@@ -618,6 +848,85 @@ mod tests {
             assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::None);
             assert_eq!(h.app.session.active(), Some(PhotoId(1)));
         }
+    }
+
+    /// A saved keymap entry that gives a key to one command (kept from before another command
+    /// declared that key) wins: the press runs that command alone, and the other command's declared
+    /// key comes back once the entry is gone.
+    #[test]
+    fn a_saved_key_wins_over_another_commands_declared_key() {
+        use lightcraft_catalog::{Flag, PhotoId};
+        let mut h = library();
+        h.app.ui.settings.keymap.insert("photo.increaseRating".into(), "P".into());
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "photo.pick"), None);
+        assert_eq!(super::conflicts(&h.app.ui.settings.keymap, "view.survey", "P"), vec!["photo.increaseRating"]);
+        key(&mut h, "P", false);
+        let photo = h.app.session.catalog.photo(PhotoId(1)).unwrap();
+        assert_eq!(photo.rating, 1, "the saved key raised the rating");
+        assert_eq!(photo.flag, Flag::None, "Flag as Pick's declared key yielded");
+        // with the entry gone, P picks again
+        h.app.ui.settings.keymap.remove("photo.increaseRating");
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "photo.pick"), Some("P"));
+        key(&mut h, "P", false);
+        assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::Pick);
+        // a contextual partner's saved key does not silence the other side
+        h.app.ui.settings.keymap.insert("crop.rotateAspect".into(), "X".into());
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "photo.reject"), Some("X"));
+        // nor does an entry for a command this build doesn't know
+        h.app.ui.settings.keymap.insert("no.suchCommand".into(), "U".into());
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "photo.unflag"), Some("U"));
+    }
+
+    /// Keymap entries for commands this build doesn't know take no key: an alias, a rating key and
+    /// a declared shortcut on the same keys keep working.
+    #[test]
+    fn junk_keymap_entries_leave_aliases_ratings_and_declared_keys() {
+        use lightcraft_catalog::{Flag, PhotoId};
+        let mut h = library();
+        for (id, sc) in [("no.suchCommand", "Shift+X"), ("no.otherCommand", "5"), ("no.thirdCommand", "P")] {
+            h.app.ui.settings.keymap.insert(id.into(), sc.into());
+        }
+        key(&mut h, "5", false);
+        assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().rating, 5, "5 still rates");
+        key(&mut h, "P", false);
+        assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::Pick, "P still picks");
+        key(&mut h, "X", true);
+        assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::Reject, "Shift+X still rejects");
+    }
+
+    #[test]
+    fn classic_f6_and_f7_toggle_the_filmstrip_and_left_panel() {
+        let mut h = library();
+        let (filmstrip, left) = (h.app.ui.filmstrip, h.app.ui.left_panel);
+        key(&mut h, "F6", false);
+        assert_eq!(h.app.ui.filmstrip, !filmstrip);
+        assert_eq!(h.app.ui.left_panel, left);
+        key(&mut h, "F7", false);
+        assert_eq!(h.app.ui.left_panel, !left);
+        key(&mut h, "F6", false);
+        key(&mut h, "F7", false);
+        assert_eq!((h.app.ui.filmstrip, h.app.ui.left_panel), (filmstrip, left));
+    }
+
+    /// Classic's F8 hides the right panel and shows the same one again; the other panels stay.
+    #[test]
+    fn classic_f8_hides_the_right_panel_and_brings_the_same_one_back() {
+        use crate::state::RightPanel;
+        let mut h = library();
+        h.app.ui.view = crate::state::ViewMode::Detail;
+        h.app.ui.right = RightPanel::Keywords;
+        h.settle(std::time::Duration::from_secs(10));
+        let (filmstrip, left) = (h.app.ui.filmstrip, h.app.ui.left_panel);
+        key(&mut h, "F8", false);
+        assert_eq!(h.app.ui.right, RightPanel::None);
+        assert_eq!((h.app.ui.filmstrip, h.app.ui.left_panel), (filmstrip, left));
+        key(&mut h, "F8", false);
+        assert_eq!(h.app.ui.right, RightPanel::Keywords, "the panel F8 hid comes back");
+        // a tool ends when F8 hides it; with nothing hidden before, F8 opens Edit
+        h.app.ui.right = RightPanel::None;
+        h.app.ui.right_hidden = RightPanel::None;
+        key(&mut h, "F8", false);
+        assert_eq!(h.app.ui.right, RightPanel::Edit);
     }
 
     #[test]
@@ -688,6 +997,38 @@ mod tests {
             key(&mut h, k, false);
             assert_eq!(h.app.session.active(), Some(PhotoId(2)), "{k}");
         }
+    }
+
+    #[test]
+    fn culling_keys_go_on_from_a_photo_that_leaves_the_filter() {
+        // #2312: the filter shows one-star photos; taking photo 2's star off makes photo 3 active, once, with or
+        // without Shift and Auto Advance, and → goes on from there instead of from the first photo
+        use lightcraft_catalog::PhotoId;
+        let one_star = || {
+            let mut h = library();
+            h.app.session.execute("library.selectAll", &json!({})).unwrap();
+            h.app.session.execute("photo.rate", &json!({"rating": 1})).unwrap();
+            h.app.session.execute("library.filter", &json!({"rating": 1, "ratingOp": "exactly"})).unwrap();
+            h.app.session.execute("library.select", &json!({"ids": [2]})).unwrap();
+            h
+        };
+        for view in [crate::state::ViewMode::PhotoGrid, crate::state::ViewMode::Detail] {
+            for (shift, auto) in [(false, false), (true, false), (false, true), (true, true)] {
+                let mut h = one_star();
+                h.app.ui.view = view;
+                h.app.ui.auto_advance = auto;
+                key(&mut h, "0", shift);
+                assert_eq!(h.app.session.catalog.photo(PhotoId(2)).unwrap().rating, 0);
+                assert_eq!(h.app.session.active(), Some(PhotoId(3)), "{view:?} Shift={shift} Auto Advance={auto}");
+                key(&mut h, "right", false);
+                assert_eq!(h.app.session.active(), Some(PhotoId(4)), "{view:?} Shift={shift} Auto Advance={auto}");
+            }
+        }
+        // the Photo menu with Auto Advance too
+        let mut h = one_star();
+        h.app.ui.auto_advance = true;
+        crate::menubar::run_item(&mut h.app, "photo.rate", json!({"rating": 0})).unwrap();
+        assert_eq!(h.app.session.active(), Some(PhotoId(3)));
     }
 
     #[test]
@@ -894,7 +1235,8 @@ mod tests {
         }
         for (i, (k, a)) in ui.iter().enumerate() {
             for (k2, b) in &ui[i + 1..] {
-                assert!(k != k2, "{a} and {b} share a key");
+                let contextual = CONTEXTUAL.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
+                assert!(k != k2 || contextual, "{a} and {b} share a key");
             }
         }
         for (i, (k, a)) in engine.iter().enumerate() {
@@ -904,8 +1246,189 @@ mod tests {
             }
         }
     }
+    mod issue1771 {
+        use super::*;
+        use crate::state::{Dialog, ViewMode};
+        use lightcraft_catalog::PhotoId;
+
+        fn grid(view: ViewMode) -> crate::headless::Headless {
+            let mut h = library();
+            h.app.ui.view = view;
+            h.app.session.execute("library.select", &json!({"ids": [1, 2, 3], "active": 2})).unwrap();
+            for _ in 0..3 {
+                h.step();
+            }
+            h
+        }
+
+        #[test]
+        fn issue1771_photo_grid_enter_opens_active_preserving_multiselection() {
+            opens(ViewMode::PhotoGrid);
+        }
+
+        #[test]
+        fn issue1771_square_grid_enter_opens_active_preserving_multiselection() {
+            opens(ViewMode::SquareGrid);
+        }
+
+        fn opens(view: ViewMode) {
+            let mut h = grid(view);
+            key(&mut h, "Enter", false);
+            assert_eq!(h.app.ui.view, ViewMode::Detail, "Enter from {view:?}");
+            assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+            assert_eq!(h.app.session.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(3)]);
+            key(&mut h, "Enter", false);
+            assert_eq!(h.app.ui.view, ViewMode::Detail, "second Enter remains in Detail");
+            assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+        }
+
+        #[test]
+        fn issue1771_no_selection_and_modifier_chords_do_not_open() {
+            for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+                let mut h = grid(view);
+                for modifiers in [json!({"shift":true}), json!({"cmd":true}), json!({"alt":true}), json!({"ctrl":true})] {
+                    let mut args = modifiers;
+                    args["key"] = json!("Enter");
+                    assert_eq!(h.request("ui.key", args, std::time::Duration::from_secs(20))["ok"], true);
+                    assert_eq!(h.app.ui.view, view);
+                }
+                h.app.session.selection = Default::default();
+                key(&mut h, "Enter", false);
+                assert_eq!(h.app.ui.view, view);
+                assert!(h.app.session.selection.ids.is_empty());
+                assert_eq!(h.app.session.active(), None);
+            }
+        }
+
+        #[test]
+        fn issue1771_search_dialog_and_shortcut_recording_keep_enter() {
+            for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+                let mut h = grid(view);
+                assert_eq!(h.request("ui.clickWidget", json!({"id":"field:search"}), std::time::Duration::from_secs(20))["ok"], true);
+                key(&mut h, "Enter", false);
+                assert_eq!(h.app.ui.view, view, "focused search");
+                h.app.run("app.shortcuts", json!({})).unwrap();
+                h.step();
+                h.step();
+                key(&mut h, "Enter", false);
+                assert_eq!(h.app.ui.view, view, "shortcut dialog");
+                assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
+                h.app.recording_shortcut = Some("view.survey".into());
+                key(&mut h, "Enter", false);
+                assert_eq!(h.app.ui.view, view, "recording owns Enter");
+                assert_eq!(super::super::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Enter"));
+            }
+        }
+
+        #[test]
+        fn issue1771_custom_binding_and_native_menu_keep_enter() {
+            for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+                let mut h = grid(view);
+                h.app.run("app.setShortcut", json!({"id":"view.survey", "shortcut":"Enter"})).unwrap();
+                key(&mut h, "Enter", false);
+                assert_eq!(h.app.ui.view, ViewMode::Survey, "custom binding wins");
+                assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+                assert_eq!(h.app.session.selection.ids.len(), 3);
+                let mut h = grid(view);
+                h.app.native_shortcuts.insert("Enter".into());
+                key(&mut h, "Enter", false);
+                assert_eq!(h.app.ui.view, view, "native menu owns Enter");
+            }
+        }
+
+        #[test]
+        fn issue1771_popup_keeps_enter() {
+            for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+                let mut h = grid(view);
+                let ctx = egui::Context::default();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events: vec![egui::Event::Key {
+                            key: egui::Key::Enter,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let ctx = ui.ctx();
+                        egui::Popup::open_id(ctx, egui::Id::unique("issue1771-menu"));
+                        assert!(egui::Popup::is_any_open(ctx));
+                        super::super::handle(&mut h.app, ctx);
+                    },
+                );
+                output.textures_delta.clear();
+                assert_eq!(h.app.ui.view, view);
+            }
+        }
+
+        #[test]
+        fn issue1771_detail_enter_keeps_active_and_multiselection() {
+            let mut h = grid(ViewMode::Detail);
+            key(&mut h, "Enter", false);
+            assert_eq!(h.app.ui.view, ViewMode::Detail);
+            assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+            assert_eq!(h.app.session.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(3)]);
+        }
+
+        #[test]
+        fn issue1771_open_file_menu_keeps_enter() {
+            for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+                let mut h = grid(view);
+                assert_eq!(h.request("ui.clickWidget", json!({"id":"menu:File"}), std::time::Duration::from_secs(20))["ok"], true);
+                h.step();
+                assert!(egui::Popup::is_any_open(&h.view.ctx), "File menu open before Enter");
+                key(&mut h, "Enter", false);
+                assert_eq!(h.app.ui.view, view);
+                assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+                assert_eq!(h.app.session.selection.ids.len(), 3);
+            }
+        }
+
+        #[test]
+        fn issue1771_repeat_event_opens_once_and_detail_keeps_selection() {
+            let mut h = grid(ViewMode::PhotoGrid);
+            h.events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: true,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+            h.step();
+            assert_eq!(h.app.ui.view, ViewMode::Detail);
+            assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+            assert_eq!(h.app.session.selection.ids.len(), 3);
+            h.events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: true,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+            h.step();
+            assert_eq!(h.app.ui.view, ViewMode::Detail);
+            assert_eq!(h.app.session.selection.ids.len(), 3);
+        }
+    }
 }
 
 #[cfg(test)]
 #[path = "shortcuts/tests_relative_ratings.rs"]
 mod relative_rating_tests;
+
+#[cfg(test)]
+#[path = "shortcuts/tests_flag_cycle.rs"]
+mod flag_cycle_tests;
+
+#[cfg(test)]
+#[path = "shortcuts/tests_enable_filters.rs"]
+mod enable_filters_tests;
+
+#[cfg(test)]
+#[path = "shortcuts/tests_filter_bar_key.rs"]
+mod filter_bar_key_tests;

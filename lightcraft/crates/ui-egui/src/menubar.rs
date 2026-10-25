@@ -48,11 +48,73 @@ pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a s
     if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet")
         || (id == "app.export" && params.get("preset").is_some())
         || (id == "app.openLibrary" && params.get("path").is_some())
+        || (id == "app.recentLibraries" && params.get("remove").is_some())
     {
         label
     } else {
         crate::i18n::tr(label)
     }
+}
+
+/// Whether AppKit offers a shortcut to its menu instead of the window. Plain letters stay
+/// with egui even when the native menu displays them as key equivalents.
+pub fn native_menu_delivers(sc: &str) -> bool {
+    sc.split('+').any(|part| matches!(part, "Cmd" | "Ctrl") || part.strip_prefix('F').is_some_and(|n| n.parse::<u8>().is_ok()))
+}
+
+/// Native label and accelerator for a menu row. A grid row may borrow the cycle key as a
+/// hint, but must not consume a modified key and turn cycling into direct grid selection.
+/// AppKit has no separate shortcut-hint column: borrowed native-owned keys are appended to
+/// the translated label instead, leaving their dispatch with egui. Ordinary G stays in the
+/// native key-equivalent column because AppKit never hands it to the menu.
+pub fn native_item_presentation<'a>(
+    keymap: &crate::shortcuts::Keymap,
+    id: &str,
+    params: &Value,
+    label: &str,
+    shortcut: Option<&'a str>,
+) -> (String, Option<&'a str>) {
+    let label = display_item_label(id, params, label);
+    let borrowed = matches!(id, "view.photoGrid" | "view.squareGrid") && shortcut != crate::shortcuts::shortcut_of(keymap, id);
+    match shortcut.filter(|sc| borrowed && native_menu_delivers(sc)) {
+        Some(sc) => (format!("{label} ({})", shortcut_text(sc, true)), None),
+        None => (label.to_string(), shortcut),
+    }
+}
+
+/// Cache key for native menu structure and effective accelerator ownership. A transfer from
+/// a direct grid binding to a borrowed cycle hint must rebuild native handles and republish
+/// their owned shortcuts even when the visible menu model is identical.
+pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::shortcuts::Keymap) -> String {
+    /// Add stable identities and effective native keys; live checked values stay outside the cache key.
+    fn walk(n: &[MenuNode], out: &mut String, keymap: &crate::shortcuts::Keymap) {
+        for x in n {
+            match x {
+                MenuNode::Item { id, params, label, checked, shortcut, .. } => {
+                    out.push_str(&MenuNode::key(id, params));
+                    out.push(if checked.is_some() { 'c' } else { 'i' });
+                    out.push_str(shortcut.as_deref().unwrap_or(""));
+                    // A key can change owners while both visible hints stay identical.
+                    out.push('|');
+                    out.push_str(native_item_presentation(keymap, id, params, label, shortcut.as_deref()).1.unwrap_or(""));
+                }
+                MenuNode::Separator => out.push('-'),
+                MenuNode::Submenu { label, children } => {
+                    out.push('[');
+                    out.push_str(label);
+                    walk(children, out, keymap);
+                    out.push(']');
+                }
+            }
+            out.push(';');
+        }
+    }
+    let mut s = format!("{};", crate::i18n::language().code());
+    for (t, items) in bar {
+        s.push_str(t);
+        walk(items, &mut s, keymap);
+    }
+    s
 }
 
 /// Top-level menus in order (the macOS app menu is added by the host).
@@ -123,6 +185,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.photoGrid",
             "view.squareGrid",
             "@Grid Info",
+            "view.thumbSizeUp",
+            "view.thumbSizeDown",
             "view.detail",
             "view.compare",
             "view.survey",
@@ -132,10 +196,13 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "@Sidebar Sections",
             "view.photoCounts",
             "view.faceBoxes",
+            "view.focusPoint",
+            "view.zoomToFocus",
             "view.filmstrip",
             "view.histogram",
             "view.navigator",
             "view.infoOverlay",
+            "@Loupe Overlay",
             "@Appearance",
             "---",
             "view.fullScreenPreview",
@@ -157,18 +224,25 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.visualizeHdr",
             "view.softProof",
             "view.maskOverlay",
+            "view.maskOverlayAll",
             "view.maskOverlayMode",
             "view.maskOverlayColor",
             "view.maskPins",
+            "@Tool Overlay",
             "view.cropOverlay",
             "---",
             "@Sort",
             "@Stacks",
             "view.filterBar",
+            "library.toggleFilters",
             "library.clearFilter",
+            "library.refresh",
+            "library.holdView",
             "---",
             "compare.swap",
             "compare.makeSelect",
+            "---",
+            "view.viewOptions",
         ],
     ),
     (
@@ -201,11 +275,14 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.saveMetadataToFile",
             "photo.readMetadataFromFile",
             "photo.reload",
+            "photo.readFocusPoints",
             "app.showInFinder",
+            "app.showInFolders",
             "dialog.rename",
             "dialog.captureTime",
             "photo.tagFromTracklog",
             "---",
+            "album.removePhotos",
             "photo.delete",
             "photo.restore",
             "photo.deletePermanently",
@@ -245,6 +322,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "app.systemInfo",
             "app.openLogFolder",
             "---",
+            "app.checkForUpdates",
             "app.about",
         ],
     ),
@@ -285,9 +363,19 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
         "file.restoreLibrary" => app.services.restore_library.is_some(),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
+        // only in an album that holds its photos (not a smart one)
+        "album.removePhotos" => in_normal_album(app) && !selection_deleted(app),
         // only where the trash is on screen
         "library.emptyRecentlyDeleted" => app.session.source == lightcraft_engine::LibrarySource::RecentlyDeleted,
         _ => true,
+    }
+}
+
+/// The library shows an album that holds its photos (not a smart album, not a folder of albums).
+pub(crate) fn in_normal_album(app: &LightcraftApp) -> bool {
+    match app.session.source {
+        lightcraft_engine::LibrarySource::Album(a) => app.session.catalog.album(a).is_some_and(|a| !a.folder && !a.is_smart()),
+        _ => false,
     }
 }
 
@@ -314,19 +402,27 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.reference" => Some(u.view == ViewMode::Reference),
         "view.leftPanel" => Some(u.left_panel),
         "view.faceBoxes" => Some(u.face_boxes),
+        "view.focusPoint" => Some(u.settings.focus_point),
+        "view.zoomToFocus" => Some(u.settings.zoom_to_focus),
         "view.filmstrip" => Some(u.filmstrip),
+        "view.frameRate" => Some(u.frame_rate),
         "view.histogram" => Some(u.histogram),
         "view.clipping" => Some(u.show_clipping),
         "view.visualizeHdr" => Some(u.hdr_visualize),
         "view.softProof" => Some(u.soft_proof),
         "view.maskOverlay" => Some(u.mask_overlay),
+        "view.maskOverlayAll" => Some(u.mask_overlay_all),
         "view.maskPins" => Some(u.mask_pins),
         "view.showOriginal" => Some(u.before_after == crate::state::BeforeAfter::Original),
         "view.beforeAfter" => Some(u.before_after == crate::state::BeforeAfter::SideBySide),
         "view.beforeAfterSplit" => Some(u.before_after == crate::state::BeforeAfter::Split),
         "view.autoAdvance" => Some(u.auto_advance),
         "view.filterBar" => Some(u.filter_bar),
+        "library.toggleFilters" => Some(!app.session.filters_off()),
+        "view.soloSections" => Some(u.single_panel),
         "view.navigator" => Some(u.navigator),
+        "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
+        "library.holdView" => Some(app.session.hold_view),
         "view.fullScreenPreview" => Some(u.fullscreen),
         "view.lightsOut" => Some(u.lights_out != crate::state::LightsOut::On),
         "view.enterFullScreen" => Some(app.window_is_fullscreen),
@@ -365,7 +461,7 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
 }
 
 /// The parameterized submenus.
-fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
+pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
     Some(match name {
@@ -505,6 +601,48 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
             }
             v
         }
+        "Loupe Overlay" => {
+            // Lightroom Classic's View ▸ Loupe Overlay ▸ Layout Image: choose the graphic, show it,
+            // and how opaque it is and how dark the photo is outside it
+            let li = &app.ui.layout_image;
+            let chosen = !li.path.trim().is_empty();
+            let mut v = vec![
+                item("view.chooseLayoutImage", Value::Null, "Choose Layout Image…", None, true, None),
+                item(
+                    "view.layoutImage",
+                    Value::Null,
+                    "Layout Image",
+                    crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.layoutImage"),
+                    chosen,
+                    Some(li.show && chosen),
+                ),
+                MenuNode::Separator,
+            ];
+            let near = |a: f32, b: f32| (a - b).abs() < 0.005;
+            for step in crate::state::LayoutImage::OPACITY_STEPS {
+                let label = format!("{} {:.0}%", crate::i18n::tr("Opacity"), step * 100.0);
+                v.push(item("view.layoutImageOpacity", json!({"opacity": step}), label, None, chosen, Some(near(li.opacity, step))));
+            }
+            v.push(MenuNode::Separator);
+            for step in crate::state::LayoutImage::MATTE_STEPS {
+                let label =
+                    if step == 0.0 { crate::i18n::tr("No Matte").to_string() } else { format!("{} {:.0}%", crate::i18n::tr("Matte"), step * 100.0) };
+                v.push(item("view.layoutImageMatte", json!({"matte": step}), label, None, chosen, Some(near(li.matte, step))));
+            }
+            v
+        }
+        "Tool Overlay" => {
+            // when the spot and mask pins show; the last item steps to the next mode (Shift+H)
+            use crate::state::ToolOverlay;
+            let mut v: Vec<MenuNode> = ToolOverlay::ALL
+                .into_iter()
+                .map(|m| item("view.toolOverlay", json!({"mode": m.name()}), m.label(), None, true, Some(app.ui.tool_overlay == m)))
+                .collect();
+            v.push(MenuNode::Separator);
+            let shortcut = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.toolOverlay");
+            v.push(item("view.toolOverlay", Value::Null, "Cycle Tool Overlay", shortcut, true, None));
+            v
+        }
         "Grid Info" => ["filename", "exposure", "date"]
             .into_iter()
             .zip(["File Name", "Exposure (shutter · aperture · ISO)", "Capture Date"])
@@ -557,25 +695,30 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
             v
         }
         "Open Recent Library" => {
-            let can = !crate::lightroom_import::is_running(app);
+            let can = crate::panels::settings::can_switch_library(app).is_ok();
             let open = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
-            let mut v: Vec<MenuNode> = app
-                .ui
-                .settings
-                .recent_libraries
+            let recent = &app.ui.settings.recent_libraries;
+            let label = |r: &str| {
+                let d = std::path::Path::new(r);
+                format!("{} — {}", crate::panels::settings::library_name(d), d.parent().map(|p| p.display().to_string()).unwrap_or_default())
+            };
+            let mut v: Vec<MenuNode> = recent
                 .iter()
                 .map(|r| {
                     let d = std::path::Path::new(r);
-                    // a missing library (moved, drive disconnected) is shown greyed out
-                    let label =
-                        format!("{} — {}", crate::panels::settings::library_name(d), d.parent().map(|p| p.display().to_string()).unwrap_or_default());
-                    item("app.openLibrary", json!({"path": r}), label, None, can && d.is_dir(), Some(open.as_deref() == Some(d)))
+                    // a library a check found missing (moved, drive disconnected) is greyed out; the
+                    // check runs on a worker (`RecentChecks`), never here: the menu is rebuilt every frame
+                    let gone = app.recent_checks.exists(r) == Some(false);
+                    item("app.openLibrary", json!({"path": r}), label(r), None, can && !gone, Some(open.as_deref() == Some(d)))
                 })
                 .collect();
             if v.is_empty() {
                 v.push(item("app.clearRecentLibraries", Value::Null, "No Recent Libraries", None, false, None));
             } else {
                 v.push(MenuNode::Separator);
+                // one entry at a time, missing ones too: only the list forgets it (issue #1290)
+                let forget = recent.iter().map(|r| item("app.recentLibraries", json!({"remove": r}), label(r), None, true, None)).collect();
+                v.push(MenuNode::Submenu { label: "Remove from List".into(), children: forget });
                 v.push(item("app.clearRecentLibraries", Value::Null, "Clear Recent Libraries", None, true, None));
             }
             v
@@ -642,7 +785,7 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
             v
         }
         "Add to Album" => {
-            let targets = app.session.targets(&Value::Null);
+            let targets = app.session.selected();
             let sel = !targets.is_empty();
             // albums hold library photos (issue #684): a Local-only selection is told what to do first
             let local_only = crate::panels::grid::local_only(app, &targets);
@@ -665,9 +808,18 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
     })
 }
 
+/// Resolve a live menu row, including contextual keys and borrowed grid-cycle hints.
 fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
     // Shift+P picks and advances in Library; don't advertise it on Presets in those views.
     let shortcut = if e.id == "panel.presets" && crate::shortcuts::library_grid(app) { None } else { e.shortcut.as_deref() };
+    // in an album the Delete key removes from the album (issue #1805): the menu says so
+    let delete_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.delete");
+    let shortcut = match e.id.as_str() {
+        "view.photoGrid" | "view.squareGrid" => shortcut.or_else(|| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.gridToggle")),
+        "album.removePhotos" => delete_key,
+        "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,
+        _ => shortcut,
+    };
     item(&e.id, Value::Null, live_label(app, &e.id, &e.label), shortcut, e.enabled, checked(app, &e.id))
 }
 
@@ -764,18 +916,78 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
 /// Compare/Survey; Auto Advance moves on).
 pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Value, String> {
     let mut params = if params.is_null() { json!({}) } else { params };
-    let culling_cmd = matches!(id, "photo.rate" | "photo.flag" | "photo.label" | "photo.pick" | "photo.reject" | "photo.unflag");
+    let culling_cmd = matches!(
+        id,
+        "photo.rate"
+            | "photo.flag"
+            | "photo.label"
+            | "photo.pick"
+            | "photo.reject"
+            | "photo.unflag"
+            | "photo.cycleFlag"
+            | "photo.increaseFlag"
+            | "photo.decreaseFlag"
+    );
     if culling_cmd {
         crate::panels::compare::target_active(app, &mut params);
     }
     if id == "photo.delete" && crate::menus::confirm_delete(app) {
         return Ok(Value::Null);
     }
+    let was = app.session.active();
     let r = app.run(id, params);
     if culling_cmd && r.is_ok() && app.ui.auto_advance {
-        crate::panels::compare::advance(app);
+        crate::panels::compare::advance(app, was);
     }
     r
+}
+
+/// What the native menu bar may do with one command it queued.
+///
+/// AppKit delivers menu accelerators and clicks straight to the host, so they never pass through
+/// [`crate::shortcuts::handle`]. The explicit policy below is the equivalent guard for that path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeCommand {
+    /// Run the command through the ordinary menu path.
+    Run,
+    /// Quit stays available: the host still runs the existing tasks/unsaved-changes confirmation.
+    Quit,
+    /// A quit/settings notice or the blocking library window owns input: drop the command.
+    Blocked,
+}
+
+/// The safety policy for commands queued by the native menu bar.
+///
+/// While a prompt or the blocking library window owns input, no queued command may act on the
+/// library behind it — including Settings… and About, which would otherwise open their dialog
+/// behind the blocking window. Quit is the one exception: the window itself offers Quit, and the
+/// host's existing confirmation ([`crate::panels::notices::may_close`]) still decides whether the
+/// process may end.
+pub fn native_command_policy(app: &LightcraftApp, id: &str) -> NativeCommand {
+    if id == "app.quit" {
+        return NativeCommand::Quit;
+    }
+    if crate::panels::notices::blocks_input(app) || crate::panels::library_problem::blocks_dialog_input(app) {
+        return NativeCommand::Blocked;
+    }
+    NativeCommand::Run
+}
+
+/// Run one command resolved from a native menu event under [`native_command_policy`].
+///
+/// The host calls this for every queued native command, so a macOS accelerator, click or About/
+/// Settings item respects the notice and blocking-library barriers. Ordinary dialogs retain
+/// their existing native-menu behavior.
+pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> NativeCommand {
+    let policy = native_command_policy(app, id);
+    match policy {
+        NativeCommand::Run => {
+            let _ = run_item(app, id, params);
+        }
+        NativeCommand::Blocked => log::debug!("native menu: {id} is blocked while another window owns input"),
+        NativeCommand::Quit => {}
+    }
+    policy
 }
 
 /// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z` elsewhere.
@@ -797,6 +1009,8 @@ pub fn shortcut_text(sc: &str, mac: bool) -> String {
             "Escape" => "⎋",
             "Left" => "←",
             "Right" => "→",
+            "Up" => "↑",
+            "Down" => "↓",
             k => k,
         };
         format!("{mods}{key}")
@@ -841,7 +1055,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
             .iter()
             .map(|(title, _)| {
                 let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(title)).font(font.clone()).color(t.text_label)).frame(false));
-                crate::widgets::register(ui.ctx(), format!("menu:{title}"), r.rect);
+                crate::widgets::register(ui, format!("menu:{title}"), r.rect);
                 r
             })
             .collect();
@@ -862,7 +1076,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         ui.spacing_mut().item_spacing.x = saved;
     } else {
         let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Menu")).font(font.clone()).color(t.text_label)).frame(false));
-        crate::widgets::register(ui.ctx(), "menu:all", r.rect);
+        crate::widgets::register(ui, "menu:all", r.rect);
         egui::Popup::menu(&r).show(|ui| {
             crate::menu_level::level(ui, 1, bar_bottom, |ui| {
                 for (title, items) in &bar {
@@ -873,9 +1087,10 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     }
     if let Some((id, params)) = clicked {
         let r = run_item(app, &id, params);
-        // an export that can't start (e.g. no folder) says why instead of doing nothing
+        // an export that can't start (e.g. no folder), or a backup / restore the host refuses
+        // (changes still unsaved, nothing stored in this browser), says why instead of doing nothing
         if let Err(e) = r
-            && matches!(id.as_str(), "app.export" | "app.exportPrevious")
+            && matches!(id.as_str(), "app.export" | "app.exportPrevious" | "file.backupLibrary" | "file.restoreLibrary")
         {
             app.toast(ui.ctx(), e);
         }
@@ -890,7 +1105,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
 /// Returns the menu whose title was just clicked right after a hover opened it.
 fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<egui::Id> {
     let popup = egui::Popup::default_response_id;
-    let key = egui::Id::new("lc-menubar-hover-opened");
+    let key = egui::Id::unique("lc-menubar-hover-opened");
     let open = titles.iter().position(|r| egui::Popup::is_id_open(ctx, popup(r)));
     // the menu a hover opened, until it closes or is clicked
     let mut confirmed = None;
@@ -928,8 +1143,8 @@ fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<e
 /// bounded like every level. The row is registered as `menusub:<label>` (the untranslated
 /// label), and while its submenu is open it is the anchor the next frame's room is measured from.
 fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
-    let r = ui.menu_button(text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
-    crate::widgets::register(ui.ctx(), format!("menusub:{label}"), r.response.rect);
+    let r = crate::widgets::menu_button(ui, text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
+    crate::widgets::register(ui, format!("menusub:{label}"), r.response.rect);
     if r.inner.is_some() {
         crate::menu_level::set_anchor(ui.ctx(), depth + 1, r.response.rect);
     }
@@ -955,6 +1170,7 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                     b = b.shortcut_text(shortcut_text(sc, mac));
                 }
                 let r = ui.add_enabled(*enabled, b);
+                crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));
@@ -983,6 +1199,134 @@ mod tests {
             MenuNode::Submenu { children, .. } => find(children, id),
             _ => None,
         })
+    }
+
+    /// #2500: a direct-grid binding takes precedence over the borrowed cycle hint.
+    #[test]
+    fn grid_menu_shortcut_hints_preserve_direct_bindings_and_clicks() {
+        let mut a = app();
+        crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
+        let bar = menu_bar(&a);
+        let nodes = &bar.iter().find(|(title, _)| title == "View").unwrap().1;
+        assert!(matches!(find(nodes, "view.photoGrid"), Some(MenuNode::Item { shortcut: Some(sc), .. }) if sc == "Cmd+Shift+1"));
+        assert!(matches!(find(nodes, "view.squareGrid"), Some(MenuNode::Item { shortcut: Some(sc), .. }) if sc == "G"));
+        // A hint never assigns the cycle key to another command.
+        assert_eq!(crate::shortcuts::shortcut_of(&a.ui.settings.keymap, "view.squareGrid"), None);
+        run_item(&mut a, "view.photoGrid", Value::Null).unwrap();
+        assert_eq!(a.ui.view, ViewMode::PhotoGrid);
+        run_item(&mut a, "view.photoGrid", Value::Null).unwrap();
+        assert_eq!(a.ui.view, ViewMode::PhotoGrid, "clicking the active row does not cycle");
+        run_item(&mut a, "view.squareGrid", Value::Null).unwrap();
+        assert_eq!(a.ui.view, ViewMode::SquareGrid);
+        run_item(&mut a, "view.gridToggle", Value::Null).unwrap();
+        assert_eq!(a.ui.view, ViewMode::PhotoGrid);
+    }
+
+    /// #2500: native hints never install a borrowed modifier/function key as a direct-grid
+    /// accelerator. Plain G remains in AppKit's shortcut column and is dispatched by egui.
+    #[test]
+    fn grid_menu_shortcut_hints_keep_native_toggle_dispatch() {
+        let mut keymap = crate::shortcuts::Keymap::new();
+        for id in ["view.photoGrid", "view.squareGrid"] {
+            let (label, accelerator) = native_item_presentation(&keymap, id, &Value::Null, "Photo Grid", Some("G"));
+            assert_eq!(label, "Photo Grid");
+            assert_eq!(accelerator, Some("G"));
+            assert!(!native_menu_delivers(accelerator.unwrap()));
+            for (key, text) in [("Cmd+Shift+G", "⌘⇧G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
+                crate::shortcuts::assign(&mut keymap, "view.gridToggle", Some(key)).unwrap();
+                let (label, accelerator) = native_item_presentation(&keymap, id, &Value::Null, "Photo Grid", Some(key));
+                assert_eq!(label, format!("Photo Grid ({text})"));
+                assert_eq!(accelerator, None, "egui keeps {key}");
+            }
+        }
+        crate::shortcuts::assign(&mut keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
+        let (label, accelerator) = native_item_presentation(&keymap, "view.photoGrid", &Value::Null, "Photo Grid", Some("Cmd+Shift+1"));
+        assert_eq!(label, "Photo Grid");
+        assert_eq!(accelerator, Some("Cmd+Shift+1"), "the row's own shortcut is a real accelerator");
+    }
+
+    /// #2500: the control channel runs the real keyboard path exactly once and menu commands
+    /// continue to select their named grid after the cycle shortcut is remapped.
+    #[test]
+    fn grid_menu_shortcut_hints_preserve_control_keyboard_dispatch() {
+        let mut h = crate::headless::Headless::new(app(), [960.0, 720.0], 1.0);
+        h.app.ui.view = ViewMode::PhotoGrid;
+        for _ in 0..3 {
+            h.step();
+        }
+        let timeout = std::time::Duration::from_secs(20);
+        let press = |h: &mut crate::headless::Headless, params| {
+            let reply = h.request("ui.key", params, timeout);
+            assert_eq!(reply["ok"], true, "{reply}");
+        };
+        press(&mut h, json!({"key": "G"}));
+        assert_eq!(h.app.ui.view, ViewMode::SquareGrid);
+        press(&mut h, json!({"key": "G"}));
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+        crate::shortcuts::assign(&mut h.app.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
+        press(&mut h, json!({"key": "G"}));
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+        press(&mut h, json!({"key": "G", "cmd": true, "shift": true}));
+        assert_eq!(h.app.ui.view, ViewMode::SquareGrid);
+        press(&mut h, json!({"key": "G", "cmd": true, "shift": true}));
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+        for _ in 0..2 {
+            let reply = h.request("ui.menu.invoke", json!({"command": "view.squareGrid"}), timeout);
+            assert_eq!(reply["ok"], true, "{reply}");
+            assert_eq!(h.app.ui.view, ViewMode::SquareGrid);
+        }
+    }
+
+    /// #2513 review: moving a direct-grid key to the cycle command leaves the visible model
+    /// unchanged, but must invalidate the native cache so its old accelerator is removed.
+    #[test]
+    fn grid_menu_shortcut_hints_invalidate_native_ownership_cache() {
+        let mut a = app();
+        crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.gridToggle", None).unwrap();
+        crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.photoGrid", Some("Cmd+Shift+G")).unwrap();
+        crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.squareGrid", Some("Cmd+Shift+2")).unwrap();
+        let before = menu_bar(&a);
+        let direct = native_menu_structure(&before, &a.ui.settings.keymap);
+        crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
+        let after = menu_bar(&a);
+        assert_eq!(before, after, "visible hint text does not expose the ownership change");
+        assert_ne!(direct, native_menu_structure(&after, &a.ui.settings.keymap), "rebuild removes the stale direct-grid accelerator");
+    }
+
+    /// #2500: grid view rows show the separate cycle command's current shortcut.
+    #[test]
+    fn grid_menu_shortcut_hints_follow_the_cycle_key() {
+        let mut a = app();
+        let hint = |a: &LightcraftApp, id: &str| {
+            let bar = menu_bar(a);
+            let nodes = &bar.iter().find(|(title, _)| title == "View").expect("View menu").1;
+            match find(nodes, id).expect("grid row") {
+                MenuNode::Item { shortcut, .. } => shortcut.clone(),
+                _ => panic!("grid row must be an item"),
+            }
+        };
+        for id in ["view.photoGrid", "view.squareGrid"] {
+            assert_eq!(hint(&a, id).as_deref(), Some("G"), "{id}");
+        }
+        crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.gridToggle", Some("Cmd+Shift+G")).unwrap();
+        for id in ["view.photoGrid", "view.squareGrid"] {
+            assert_eq!(hint(&a, id).as_deref(), Some("Cmd+Shift+G"), "{id}");
+        }
+        crate::shortcuts::assign(&mut a.ui.settings.keymap, "view.gridToggle", None).unwrap();
+        for id in ["view.photoGrid", "view.squareGrid"] {
+            assert_eq!(hint(&a, id), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn view_menu_offers_the_hold_and_the_refresh_and_checks_the_hold_while_it_is_on() {
+        let mut a = app();
+        let view = |a: &LightcraftApp| menu_bar(a).into_iter().find(|(t, _)| t == "View").expect("View menu").1;
+        let items = view(&a);
+        assert!(matches!(find(&items, "library.refresh"), Some(MenuNode::Item { enabled: true, .. })));
+        assert!(matches!(find(&items, "library.holdView"), Some(MenuNode::Item { checked: Some(false), .. })), "off unless asked for");
+        a.session.execute("library.holdView", &json!({"on": true})).expect("hold the view");
+        assert!(matches!(find(&view(&a), "library.holdView"), Some(MenuNode::Item { checked: Some(true), .. })));
     }
 
     /// The Sort submenu is expanded by hand: Reshuffle appears once (not again from the registry),
@@ -1186,6 +1530,12 @@ mod tests {
         let r = run_item(&mut app, "app.export", json!({"preset": "Tiny PNG", "dir": "  "}));
         assert_eq!(r.unwrap_err(), crate::control::NO_EXPORT_FOLDER);
         assert_eq!(written.lock().unwrap().len(), n, "nothing written without a folder");
+        // "Same folder as original photo" needs no folder; a demo photo has none of its own, so it
+        // gets its own error rather than a file written elsewhere (issue #956)
+        let r = run_item(&mut app, "app.export", json!({"preset": "Tiny PNG", "dir": "  ", "destinationMode": "sameAsOriginal"}));
+        let e = r.unwrap_err();
+        assert!(e.contains("no folder on disk"), "{e}");
+        assert_eq!(written.lock().unwrap().len(), n, "nothing written for a photo without a folder");
     }
 
     #[test]
@@ -1284,7 +1634,209 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Regression test for #49: the in-window menu headings (File, Edit, ...) sat only egui's default
+    // 8 px apart, too close to read or aim at.
     #[test]
+    fn in_window_menu_headings_are_spaced_apart() {
+        let mut a = app();
+        a.native_menu = false;
+        let mut h = crate::headless::Headless::new(a, [1400.0, 900.0], 1.0);
+        h.step();
+        h.step();
+        let rect = |id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("{id} is on screen"));
+        let titles: Vec<_> = ["File", "Edit", "View", "Photo", "Window", "Help"].iter().map(|t| rect(&format!("menu:{t}"))).collect();
+        for pair in titles.windows(2) {
+            let gap = pair[1].left() - pair[0].right();
+            assert!(gap >= 24.0 - 0.5, "headings {:?} and {:?} are only {gap} px apart", pair[0], pair[1]);
+        }
+    }
+
+    /// A backup the host refuses (changes still unsaved, issue #1508) says why when started from
+    /// the menu, as a refused export does; the refusal used to reach only the control channel.
+    #[test]
+    fn a_refused_backup_from_the_menu_shows_why() {
+        // the host refuses, as the web one does while changes are still unsaved (issue #1508)
+        let refusal = "Backup not started: 1 change could not be saved to browser storage yet";
+        let services = crate::Services {
+            backup_library: Some(Box::new(move |_: &mut lightcraft_engine::Session| Err(refusal.to_string()))),
+            ..Default::default()
+        };
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        let t = std::time::Duration::from_secs(30);
+        h.settle(t);
+        for id in ["menu:File", "menuitem:file.backupLibrary"] {
+            let r = h.request("ui.clickWidget", json!({"id": id}), t);
+            assert_eq!(r["ok"], true, "{id}: {r}");
+            h.step();
+        }
+        // (read at once: a toast keeps the UI repainting until it expires, so settling would outlive it)
+        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains(refusal), "the refusal is shown: {toast:?}");
+    }
+
+    /// #1528: `file.findMissing` with `wait: true` must propagate folder validation and search
+    /// failures as errors instead of returning `Ok(null)`.
+    #[test]
+    fn find_missing_waited_invalid_folder_returns_error_with_zero_mutations() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-missing-err-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dummy = dir.join("dummy.png");
+        let img = lightcraft_raster::Rgba8::from_fn(8, 8, |_, _| [10, 20, 30, 255]);
+        let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+        std::fs::write(&dummy, lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Default::default());
+        app.session.execute("library.import", &json!({"paths": [dummy.to_string_lossy()]})).unwrap();
+        // remove the file on disk so the photo is missing
+        std::fs::remove_file(&dummy).unwrap();
+        let id = app.session.catalog.photos().next().unwrap().id;
+        let original_path = match &app.session.catalog.photo(id).unwrap().source {
+            lightcraft_catalog::Source::File { path } => path.clone(),
+            _ => panic!("expected file source"),
+        };
+        let undo_count_before = app.session.undo.len();
+
+        // 1. Point at a nonexistent directory
+        let bad_dir = dir.join("nonexistent_subdir");
+        let err = run_item(&mut app, "file.findMissing", json!({"folder": bad_dir.to_string_lossy(), "wait": true})).unwrap_err();
+        assert!(err.contains("not a folder"), "expected 'not a folder' error, got: {err}");
+        assert!(app.ui.toast.as_ref().map(|t| t.0.contains("not a folder")).unwrap_or(false), "toast should reflect failure");
+        assert!(app.ui.last_find_missing.is_none(), "last_find_missing must remain None on failure");
+
+        // 2. Invalid timeout parameters are rejected cleanly
+        let err = run_item(&mut app, "file.findMissing", json!({"folder": dir.to_string_lossy(), "wait": true, "timeout": -1.0})).unwrap_err();
+        assert!(err.contains("non-negative number of seconds"), "{err}");
+        let err = run_item(&mut app, "file.findMissing", json!({"folder": dir.to_string_lossy(), "wait": true, "timeout": "invalid"})).unwrap_err();
+        assert!(err.contains("number of seconds"), "{err}");
+        let err = run_item(&mut app, "file.findMissing", json!({"folder": dir.to_string_lossy(), "wait": true, "timeout": 1e300})).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+
+        // Catalog and photo path must not have been mutated
+        assert_eq!(app.session.undo.len(), undo_count_before, "no undo steps added on failed search");
+        let path_after = match &app.session.catalog.photo(id).unwrap().source {
+            lightcraft_catalog::Source::File { path } => path.clone(),
+            _ => panic!("expected file source"),
+        };
+        assert_eq!(path_after, original_path, "missing photo path must not change on failure");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #1528: `file.findMissing` with `wait: true` returns structured results on success,
+    /// and background mode (`wait: false` or omitted) continues returning `{"background": true}`.
+    #[test]
+    fn find_missing_waited_structured_results_and_background_mode() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-missing-bg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("orig")).unwrap();
+        std::fs::create_dir_all(dir.join("found")).unwrap();
+        let img = lightcraft_raster::Rgba8::from_fn(8, 8, |_, _| [10, 20, 30, 255]);
+        let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+        std::fs::write(dir.join("orig/pic.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Default::default());
+        app.session.execute("library.import", &json!({"paths": [dir.join("orig").to_string_lossy()]})).unwrap();
+        std::fs::rename(dir.join("orig/pic.png"), dir.join("found/pic.png")).unwrap();
+
+        // Background mode (wait omitted): returns {"background": true} immediately
+        let bg = run_item(&mut app, "file.findMissing", json!({"folder": dir.join("found").to_string_lossy()})).unwrap();
+        assert_eq!(bg, json!({"background": true}));
+
+        // Wait for background task to complete
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        assert!(crate::tasks::wait(&mut app, &ctx, std::time::Duration::from_secs(5)));
+        let last = app.ui.last_find_missing.as_ref().unwrap();
+        assert_eq!(last["found"].as_array().map(Vec::len), Some(1));
+
+        // Now move again and run with wait: true -> returns structured results directly
+        std::fs::create_dir_all(dir.join("found2")).unwrap();
+        std::fs::rename(dir.join("found/pic.png"), dir.join("found2/pic.png")).unwrap();
+        let r = run_item(&mut app, "file.findMissing", json!({"folder": dir.join("found2").to_string_lossy(), "wait": true})).unwrap();
+        assert!(r.get("found").is_some(), "must have 'found' array: {r}");
+        assert!(r.get("missing").is_some(), "must have 'missing' count: {r}");
+        assert!(r.get("ambiguous").is_some(), "must have 'ambiguous' array: {r}");
+        assert_eq!(r["found"].as_array().map(Vec::len), Some(1));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #1528: `file.findMissing` with `wait: true` when timed out returns an actionable error
+    /// indicating timeout and that the search continues in the background, rather than returning `Ok(null)`.
+    #[test]
+    fn find_missing_waited_timeout_behavior() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-missing-to-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Default::default());
+        // Injected test-only worker delay so wait times out deterministically
+        app.ui.find_missing_test_delay = Some(std::time::Duration::from_millis(100));
+        let err = run_item(&mut app, "file.findMissing", json!({"folder": dir.to_string_lossy(), "wait": true, "timeout": 0.005})).unwrap_err();
+
+        assert!(err.contains("search timed out"), "error should mention timeout: {err}");
+        assert!(err.contains("search continues in the background"), "error should document continuation: {err}");
+
+        // The background task continues running in app.tasks
+        assert!(app.tasks.is_running("Find Missing Photos"), "task should continue running in background");
+
+        // Clean up the running task so no worker hangs
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        assert!(crate::tasks::wait_for(&mut app, &ctx, "Find Missing Photos", std::time::Duration::from_secs(5)));
+        assert!(!app.tasks.is_running("Find Missing Photos"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #1528: `file.findMissing` with `wait: true` must return when its own search finishes,
+    /// even if unrelated background tasks remain active in `app.tasks`.
+    #[test]
+    fn find_missing_waited_completes_while_unrelated_task_remains_active() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-missing-multi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("orig")).unwrap();
+        std::fs::create_dir_all(dir.join("found")).unwrap();
+        let img = lightcraft_raster::Rgba8::from_fn(8, 8, |_, _| [10, 20, 30, 255]);
+        let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+        std::fs::write(dir.join("orig/pic.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Default::default());
+        app.session.execute("library.import", &json!({"paths": [dir.join("orig").to_string_lossy()]})).unwrap();
+        std::fs::rename(dir.join("orig/pic.png"), dir.join("found/pic.png")).unwrap();
+
+        // Spawn an unrelated background task that blocks on a channel until released
+        let (tx_unblock, rx_unblock) = std::sync::mpsc::channel::<()>();
+        crate::tasks::spawn(
+            &mut app,
+            "Unrelated Long Background Task",
+            None,
+            move || {
+                let _ = rx_unblock.recv();
+            },
+            |_app, _ctx, _| {},
+        )
+        .unwrap();
+        assert!(app.tasks.is_running("Unrelated Long Background Task"));
+
+        // Run file.findMissing with wait: true: must complete without waiting for the unrelated task
+        let r = run_item(&mut app, "file.findMissing", json!({"folder": dir.join("found").to_string_lossy(), "wait": true, "timeout": 5.0})).unwrap();
+        assert_eq!(r["found"].as_array().map(Vec::len), Some(1), "Find Missing must complete successfully: {r}");
+
+        // The unrelated task must STILL be active
+        assert!(app.tasks.is_running("Unrelated Long Background Task"), "unrelated task must still be running");
+
+        // Clean up the blocked background task
+        let _ = tx_unblock.send(());
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        assert!(crate::tasks::wait(&mut app, &ctx, std::time::Duration::from_secs(5)));
+        assert!(app.tasks.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+
     fn auto_tag_from_tracklog() {
         let dir = std::env::temp_dir().join(format!("lc-ui-tracklog-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1338,10 +1890,129 @@ mod tests {
         assert_eq!(app.session.catalog.photo(other).unwrap().meta.copyright, "© Me");
     }
 
+    /// Native menu accelerators never pass through `shortcuts::handle`: a command queued by the
+    /// native menu must obey the same blocking-window/prompt policy. Settings… and About must not
+    /// open behind the blocking window, and Quit stays available for its existing confirmation.
+    #[test]
+    fn native_menu_commands_respect_the_blocking_window_policy() {
+        use crate::panels::library_problem::LibraryProblem;
+        use crate::state::Dialog;
+
+        let mut h = crate::headless::Headless::new(app(), [1000.0, 760.0], 1.0);
+        h.settle(std::time::Duration::from_secs(20));
+        h.app.ui.view = ViewMode::PhotoGrid;
+        h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
+
+        assert_eq!(native_command_policy(&h.app, "app.settings"), NativeCommand::Blocked);
+        assert_eq!(native_command_policy(&h.app, "app.about"), NativeCommand::Blocked);
+        assert_eq!(native_command_policy(&h.app, "view.gridToggle"), NativeCommand::Blocked);
+        assert_eq!(native_command_policy(&h.app, "app.quit"), NativeCommand::Quit, "Quit keeps its own confirmation");
+        assert_eq!(run_native_command(&mut h.app, "app.settings", Value::Null), NativeCommand::Blocked);
+        assert!(h.app.ui.dialog.is_none(), "Settings must not open behind the blocking library window");
+        assert_eq!(run_native_command(&mut h.app, "app.about", Value::Null), NativeCommand::Blocked);
+        assert!(h.app.ui.dialog.is_none(), "About must not open behind the blocking library window");
+        assert_eq!(run_native_command(&mut h.app, "view.gridToggle", Value::Null), NativeCommand::Blocked);
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "a menu command did not act on the library behind the window");
+        assert_eq!(
+            run_native_command(&mut h.app, "app.quit", Value::Null),
+            NativeCommand::Quit,
+            "Quit stays for the host's existing tasks/unsaved-changes confirmation"
+        );
+        assert!(h.app.ui.dialog.is_none());
+
+        // The launch list owns input the same way.
+        let settings = crate::state::AppSettings {
+            recent_libraries: vec!["/no/such/library-one".into()],
+            library_path: "/no/such/library-one".into(),
+            ..Default::default()
+        };
+        h.app.library_problem = Some(LibraryProblem::choose(&settings));
+        assert_eq!(native_command_policy(&h.app, "app.about"), NativeCommand::Blocked);
+        assert_eq!(run_native_command(&mut h.app, "app.about", Value::Null), NativeCommand::Blocked);
+        assert!(h.app.ui.dialog.is_none(), "About must not open behind the launch list");
+        // The launch list's own New Library prompt is not a background barrier: it keeps its
+        // priority instead of being treated as an unrelated dialog behind the list.
+        h.app.ui.dialog = Some(Dialog::TextPrompt {
+            title: "New Library".into(),
+            hint: "Library name".into(),
+            value: "New Library".into(),
+            command: "app.newLibrary".into(),
+            params: json!({}),
+            key: "name".into(),
+        });
+        assert_eq!(native_command_policy(&h.app, "app.settings"), NativeCommand::Run, "the launch list's own prompt is not a background barrier");
+        h.app.ui.dialog = None;
+
+        // A quit/settings notice owns input in the same way.
+        h.app.library_problem = None;
+        h.app.notices.push("The settings file could not be read and was reset.".into());
+        assert_eq!(native_command_policy(&h.app, "app.settings"), NativeCommand::Blocked);
+        assert_eq!(run_native_command(&mut h.app, "app.settings", Value::Null), NativeCommand::Blocked);
+        assert!(h.app.ui.dialog.is_none(), "Settings must not open behind a notice");
+
+        // Once nothing blocks input, the same queued command runs normally.
+        h.app.notices.clear();
+        assert_eq!(native_command_policy(&h.app, "app.settings"), NativeCommand::Run);
+        assert_eq!(run_native_command(&mut h.app, "app.settings", Value::Null), NativeCommand::Run);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::Settings { .. })), "the command runs when no barrier owns input");
+    }
+
     #[test]
     fn shortcut_text_per_platform() {
         assert_eq!(shortcut_text("Cmd+Shift+Z", true), "⌘⇧Z");
         assert_eq!(shortcut_text("Cmd+Shift+Z", false), "Ctrl+Shift+Z");
         assert_eq!(shortcut_text("Delete", true), "⌫");
+    }
+
+    /// Every item of a menu, submenus included.
+    fn flat(nodes: &[MenuNode]) -> Vec<&MenuNode> {
+        nodes
+            .iter()
+            .flat_map(|n| match n {
+                MenuNode::Submenu { children, .. } => flat(children),
+                MenuNode::Item { .. } => vec![n],
+                MenuNode::Separator => vec![],
+            })
+            .collect()
+    }
+
+    /// Given the menu bar, Then an item that turns something on or off is named for the thing,
+    /// with its check mark saying whether it is on: "Filmstrip ✓", never "Show Filmstrip ✓".
+    /// Show Original is a view (\), not a switch: it keeps Lightroom's name.
+    #[test]
+    fn toggles_are_named_for_the_thing_not_show() {
+        let mut a = app();
+        a.ui.view = ViewMode::Detail;
+        let shows: Vec<String> = menu_bar(&a)
+            .iter()
+            .flat_map(|(_, items)| flat(items).into_iter().cloned().collect::<Vec<_>>())
+            .filter_map(|n| match n {
+                MenuNode::Item { id, params, label, checked: Some(_), .. }
+                    if params.is_null() && label.starts_with("Show ") && id != "view.showOriginal" =>
+                {
+                    Some(format!("{id}: {label}"))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(shows.is_empty(), "toggles named \"Show …\": {shows:#?}");
+    }
+
+    /// Given every command with a menu path, Then no two of them share a label, and none is named
+    /// like a menu: the menus, the keyboard shortcuts list and the control channel tell them apart
+    /// by name ("Detail" the view and "Detail" the Edit section were two things called the same).
+    #[test]
+    fn no_two_menu_commands_share_a_label() {
+        let entries = crate::menus::menu_entries(&app());
+        let mut clashes = Vec::new();
+        for (i, e) in entries.iter().enumerate() {
+            if MENUS.contains(&e.label.as_str()) {
+                clashes.push(format!("{} is called like the {} menu", e.id, e.label));
+            }
+            if let Some(other) = entries[..i].iter().find(|o| o.label == e.label && o.id != e.id) {
+                clashes.push(format!("{} and {} are both {:?}", other.id, e.id, e.label));
+            }
+        }
+        assert!(clashes.is_empty(), "{clashes:#?}");
     }
 }

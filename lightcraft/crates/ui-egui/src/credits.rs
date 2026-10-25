@@ -229,7 +229,7 @@ fn name_link(app: &mut LightcraftApp, ui: &mut egui::Ui, c: &Contributor, names:
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
 pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let id = egui::Id::new("credits_view");
+    let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
         ui.label(crate::i18n::tr("Show"));
@@ -240,7 +240,7 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         ui.separator();
         ui.label(crate::i18n::tr("Sort"));
-        egui::ComboBox::from_id_salt("credits_sort").selected_text(crate::i18n::tr(v.key.label().0)).show_ui(ui, |ui| {
+        let sort = crate::widgets::combo_box("credits_sort").selected_text(crate::i18n::tr(v.key.label().0)).show_ui(ui, |ui| {
             for k in SortKey::ALL {
                 if ui.selectable_label(v.key == k, crate::i18n::tr(k.label().0)).clicked() {
                     v.key = k;
@@ -248,17 +248,21 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             }
         });
-        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text(crate::i18n::tr("Reverse the order")).clicked() {
+        crate::widgets::name_combo(&sort.response, crate::i18n::tr("Sort"));
+        let reverse =
+            crate::widgets::arrow_button(ui, "", if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown }, false);
+        reverse.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Reverse the order")));
+        if reverse.on_hover_text(crate::i18n::tr("Reverse the order")).clicked() {
             v.ascending = !v.ascending;
         }
         ui.separator();
         let r = ui.selectable_label(!v.table, crate::i18n::tr("Grab bag"));
-        crate::widgets::register(ui.ctx(), "button:creditsGrabBag", r.rect);
+        crate::widgets::register(ui, "button:creditsGrabBag", r.rect);
         if r.clicked() {
             v.table = false;
         }
         let r = ui.selectable_label(v.table, crate::i18n::tr("Table"));
-        crate::widgets::register(ui.ctx(), "button:creditsTable", r.rect);
+        crate::widgets::register(ui, "button:creditsTable", r.rect);
         if r.clicked() {
             v.table = true;
         }
@@ -289,12 +293,18 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn table(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
     egui::Grid::new("credits_table").striped(true).num_columns(SortKey::ALL.len()).show(ui, |ui| {
         for k in SortKey::ALL {
-            let arrow = if v.key == k { if v.ascending { " ▲" } else { " ▼" } } else { "" };
-            if ui
-                .button(RichText::new(format!("{}{arrow}", crate::i18n::tr(k.label().1))).strong())
-                .on_hover_text(crate::i18n::tr(k.label().0))
-                .clicked()
-            {
+            let text = RichText::new(crate::i18n::tr(k.label().1)).strong();
+            let header = if v.key == k {
+                crate::widgets::arrow_button(
+                    ui,
+                    text,
+                    if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown },
+                    false,
+                )
+            } else {
+                ui.button(text)
+            };
+            if header.on_hover_text(crate::i18n::tr(k.label().0)).clicked() {
                 if v.key == k {
                     v.ascending = !v.ascending;
                 } else {

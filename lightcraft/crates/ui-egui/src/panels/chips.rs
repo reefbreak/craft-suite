@@ -18,7 +18,8 @@ const TAIL: f32 = 170.0;
 /// "14 of 120 photos" when a filter narrows the source, else "14 photos".
 pub fn count_text(matching: usize, total: Option<usize>, filtering: bool) -> String {
     match total {
-        Some(t) if filtering && t != matching => crate::i18n::tr_format!("{matching} of {t} photos", matching = matching, t = t),
+        // (a held view can show more than now match its source: no "3 of 2")
+        Some(t) if filtering && t > matching => crate::i18n::tr_format!("{matching} of {t} photos", matching = matching, t = t),
         _ => crate::i18n::tr_format!("{matching} photos", matching = matching),
     }
 }
@@ -40,10 +41,16 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         return format!("{}: {}", tr("Rules"), rules_label(rules, catalog));
     }
     if chip.clear.get("label").is_some() {
-        let mut labels = filter.labels.clone();
-        labels.extend(filter.label.filter(|label| !labels.contains(label)));
-        let names = labels.iter().map(|label| crate::i18n::color_label(catalog, *label)).collect::<Vec<_>>();
-        return format!("{}: {}", tr("Label"), names.join(&format!(" {} ", tr("or"))));
+        let shown = filter.labels_shown().unwrap_or_default();
+        let name = |label: &lightcraft_catalog::ColorLabel| crate::i18n::color_label(catalog, *label);
+        let or = |labels: &[lightcraft_catalog::ColorLabel]| labels.iter().map(name).collect::<Vec<_>>().join(&format!(" {} ", tr("or")));
+        let names = if shown.is_empty() {
+            let plural = if filter.labels.len() > 1 { format!("({})", or(&filter.labels)) } else { or(&filter.labels) };
+            format!("{} {} {plural}", filter.label.as_ref().map(name).unwrap_or_default(), tr("and"))
+        } else {
+            or(&shown)
+        };
+        return format!("{}: {names}", tr("Label"));
     }
     if chip.clear.get("dateFrom").is_some() || chip.clear.get("dateTo").is_some() {
         return match (&filter.date_from, &filter.date_to) {
@@ -54,7 +61,7 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         };
     }
     if chip.clear.get("only").is_some() {
-        return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = filter.only.len()));
+        return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = if filter.only_none { 0 } else { filter.only.len() }));
     }
     if let Some((prefix, value)) = chip.label.split_once(": ") {
         let value = if matches!(prefix, "Flag" | "Type") {
@@ -82,7 +89,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     let t = Tokens::get(ui.ctx());
     let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, t.canvas);
-    register(ui.ctx(), "filterchips", bar);
+    register(ui, "filterchips", bar);
     let font = t.font(12.0);
     let right = bar.right() - 16.0;
     let mut x = bar.left() + 20.0;
@@ -100,8 +107,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         let text_r = Rect::from_min_max(r.min, pos2(r.right() - 22.0, r.max.y));
         ui.painter().with_clip_rect(text_r).text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, &label, font.clone(), t.text);
         let xr = Rect::from_center_size(pos2(r.right() - 12.0, r.center().y), vec2(18.0, 18.0));
-        let resp = ui.interact(xr, egui::Id::new(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
-        register(ui.ctx(), format!("chip:{i}"), xr);
+        let resp = ui.interact(xr, egui::Id::unique(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
+        crate::widgets::announce(&resp, format!("{}: {label}", crate::i18n::tr("Remove this filter")));
+        register(ui, format!("chip:{i}"), xr);
         let col = if resp.hovered() { t.text } else { t.text_dim };
         let m = 3.5;
         let (a, b) = (xr.center() - vec2(m, m), xr.center() + vec2(m, m));

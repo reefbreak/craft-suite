@@ -4,7 +4,7 @@ use serde_json::json;
 
 use crate::Session;
 use crate::export::{ExportFormat, ExportOptions, export_photo};
-use crate::tests_xmp::{synthetic_dng_with, temp_dir};
+use crate::tests_xmp::{synthetic_dng_with, synthetic_psd_with_metadata, temp_dir};
 
 #[test]
 fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
@@ -96,6 +96,43 @@ fn dng_export_rejects_non_raw_photos() {
     let err = export_photo(&mut s, id, &ExportOptions { format: ExportFormat::Dng, ..Default::default() }, 1).err().unwrap();
     assert!(err.contains("needs a raw photo"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review of #1966: a preset without `format` keeps its `bitDepth` until the format written is
+/// known. With `path: a.png` it writes the 16-bit PNG it asks for; a format without that depth
+/// gets its own, as stored settings do, while a depth the call itself passes is still refused.
+#[test]
+fn a_preset_depth_is_judged_against_the_format_written() {
+    use crate::export::ExportPreset;
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    s.export_presets.push(ExportPreset { name: "Deep".into(), params: json!({"bitDepth": 16, "longEdge": 64}) });
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.png"})).unwrap();
+    let o = ExportOptions::from_params(&p).unwrap();
+    assert_eq!((o.format, o.bit_depth), (ExportFormat::Png, Some(16)));
+    assert_eq!(export_photo(&mut s, id, &o, 1).unwrap().bytes[24], 16, "a 16-bit PNG");
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.jpg"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().bit_depth, None);
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.jpg", "bitDepth": 16})).unwrap();
+    assert!(ExportOptions::from_params(&p).unwrap_err().to_string().contains("`bitDepth` must be 8 for jpeg"));
+    // such a preset can be saved: its depth is judged when it exports; with a format, at once
+    s.execute("export.savePreset", &json!({"name": "Deep 2", "params": {"bitDepth": 16}})).unwrap();
+    assert!(s.execute("export.savePreset", &json!({"name": "Deep 3", "params": {"format": "jpeg", "bitDepth": 16}})).is_err());
+}
+
+/// Review of #1966: savePreset without `params` saves the previous export, a stored setting. A
+/// depth written before #1952 at the format's own depth is dropped, as Export with Previous does,
+/// instead of refusing the save; without `format`, the depth waits for the format written.
+#[test]
+fn a_preset_saved_from_the_previous_export_drops_its_unfit_depth() {
+    let mut s = Session::with_demo();
+    s.last_export = Some(json!({"format": "jpeg", "bitDepth": 16, "quality": 80, "dir": "/out"}));
+    s.execute("export.savePreset", &json!({"name": "Old"})).unwrap();
+    assert_eq!(s.export_presets[0].params, json!({"format": "jpeg", "quality": 80}));
+    s.last_export = Some(json!({"bitDepth": 16, "dir": "/out"}));
+    s.execute("export.savePreset", &json!({"name": "Deep"})).unwrap();
+    let p = s.export_params(&json!({"preset": "Deep", "path": "/out/a.png"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().bit_depth, Some(16));
 }
 
 #[test]
@@ -234,6 +271,93 @@ fn library_with_jpeg(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::p
     let id = s.catalog.photos().next().unwrap().id;
     s.execute("develop.set", &json!({"ids": [id.0], "control": "light.exposure", "value": 1.0})).unwrap();
     (s, id, dir, src, bytes)
+}
+
+fn preset_export_preserves_originals(command: &str, selection: serde_json::Value, tag: &str) {
+    let (mut s, _, dir, src, original) = library_with_jpeg(tag);
+    let sidecar = src.with_extension("xmp");
+    let appended_sidecar = dir.join("IMG_1.jpg.xmp");
+    std::fs::write(&sidecar, b"existing sidecar").unwrap();
+    std::fs::write(&appended_sidecar, b"appended sidecar").unwrap();
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let mut targets = vec![src.clone(), dir.join("sub/../IMG_1.jpg"), sidecar.clone()];
+    targets.push(appended_sidecar.clone());
+    #[cfg(unix)]
+    {
+        let alias = dir.join("alias.jpg");
+        std::os::unix::fs::symlink(&src, &alias).unwrap();
+        targets.push(alias);
+        let alias = dir.join("alias.xmp");
+        std::os::unix::fs::symlink(&sidecar, &alias).unwrap();
+        targets.push(alias);
+    }
+    for path in targets {
+        let mut params = selection.clone();
+        params["path"] = json!(path.to_string_lossy());
+        let error = s.execute(command, &params).unwrap_err().to_string();
+        assert!(error.contains("never writes over an original"), "{error}");
+        assert_eq!(std::fs::read(&src).unwrap(), original);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), b"existing sidecar");
+        assert_eq!(std::fs::read(&appended_sidecar).unwrap(), b"appended sidecar");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn preset_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("preset.export", json!({"ids": ["lc.warm-glow"]}), "preset-export-guard");
+}
+
+#[test]
+fn curve_preset_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("curve.exportPresets", json!({"names": ["Linear"]}), "curve-export-guard");
+}
+
+/// #1944: Export Keywords went straight to `std::fs::write`, replacing a library original.
+#[test]
+fn keyword_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("keyword.export", json!({}), "keyword-export-guard");
+}
+
+#[test]
+fn keyword_export_preserves_the_previous_file_on_write_failure() {
+    let dir = temp_dir("keyword-export-failure");
+    let mut s = Session::with_demo();
+    let path = dir.join("keywords.txt");
+    let params = json!({"path": path.to_string_lossy()});
+    s.execute("keyword.export", &params).unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    {
+        let _fault = lightcraft_catalog::safe_file::fail_writes_after(4);
+        assert!(s.execute("keyword.export", &params).is_err(), "keyword.export must report the failed write");
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), previous, "the prior export is kept");
+    s.execute("keyword.export", &params).unwrap();
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temporary files remain");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn preset_exports_preserve_previous_files_on_write_failure() {
+    let dir = temp_dir("preset-export-failure");
+    let mut s = Session::new();
+    for (command, selection, file) in
+        [("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"), ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve")]
+    {
+        let path = dir.join(file);
+        let mut params = selection;
+        params["path"] = json!(path.to_string_lossy());
+        s.execute(command, &params).unwrap();
+        let previous = std::fs::read(&path).unwrap();
+        {
+            let _fault = lightcraft_catalog::safe_file::fail_writes_after(4);
+            assert!(s.execute(command, &params).is_err(), "{command} must report the failed write");
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), previous, "{command} preserves the prior export");
+        assert_eq!(s.execute(command, &params).unwrap()["count"], 1, "replacement still succeeds");
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no temporary files remain");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 fn disk_batch(
@@ -455,6 +579,21 @@ fn hdr_avif_export_is_pq_rec2020() {
     assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
 }
 
+#[test]
+fn hdr_avif_export_hlg() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "hdrTransfer": "hlg", "quality": 70}));
+    assert_eq!(o.hdr_transfer, crate::export::HdrCurve::Hlg);
+    assert_eq!(o.to_json()["hdrTransfer"], "hlg");
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let hdr = export_photo(&mut s, id, &o, 1).unwrap();
+    // nclx: BT.2020 primaries (9), HLG (18), BT.2020 NCL (9), full range; no content light level box
+    let i = hdr.bytes.windows(4).position(|w| w == b"nclx").expect("colr nclx box");
+    assert_eq!(hdr.bytes[i + 4..i + 11].to_vec(), vec![0, 9, 0, 18, 0, 9, 0x80]);
+    assert!(!hdr.bytes.windows(4).any(|w| w == b"clli"));
+}
+
 /// "Remove location info" holds for the file-copying formats too: the sidecar and the DNG's
 /// packet carry no location, and an original that embeds GPS is refused rather than copied.
 #[test]
@@ -501,6 +640,30 @@ fn remove_location_holds_for_original_and_dng_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `metadata: "NONE"` as `app.export` sends it: the JPEG carries no location or camera data
+/// (it used to be read as `all` and carry both).
+#[test]
+fn metadata_none_in_any_case_exports_no_metadata() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [48.85, 2.35], "city": "Paris"})).unwrap();
+    let export = |s: &mut Session, extra: serde_json::Value| {
+        let mut p = json!({"format": "jpeg", "longEdge": 64});
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        lightcraft_meta::extract(&export_photo(s, id, &ExportOptions::from_params(&p).unwrap(), 1).unwrap().bytes)
+    };
+    let all = export(&mut s, json!({}));
+    assert!(all.gps.is_some() && all.city.is_some(), "the default keeps everything: {all:?}");
+    for v in ["none", "NONE", "None"] {
+        let m = export(&mut s, json!({"metadata": v}));
+        assert!(m.gps.is_none() && m.city.is_none() && m.model.is_none(), "{v}: {m:?}");
+    }
+    let m = export(&mut s, json!({"metadata": "ALL", "removeLocation": true}));
+    assert!(m.gps.is_none() && m.city.is_none(), "{m:?}");
+}
+
 /// An original raw whose own metadata holds GPS is refused under "Remove location info".
 #[test]
 fn remove_location_refuses_a_raw_that_embeds_gps() {
@@ -515,6 +678,92 @@ fn remove_location_refuses_a_raw_that_embeds_gps() {
     let id = s.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
     assert!(err.contains("can't remove the location"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_that_embeds_gps() {
+    let dir = temp_dir("export-noloc-psd");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let path = dir.join("Geo.psd");
+    let bytes = synthetic_psd_with_metadata(&gps);
+    assert_eq!(lightcraft_meta::extract(&bytes).gps, gps.gps, "the fixture embeds EXIF GPS");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't remove the location") && err.contains("export as JPEG"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_unreadable_xmp() {
+    let dir = temp_dir("export-noloc-psd-xmp");
+    let path = dir.join("Unreadable.psd");
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let xmp = "<x:xmpmeta><broken";
+    let embedded = lightcraft_codecs::EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = lightcraft_codecs::encode_psd(&image, &embedded).unwrap();
+    assert_eq!(lightcraft_meta::extract(&bytes), lightcraft_meta::Metadata::default(), "ordinary extraction stays best-effort");
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_invalid_utf8_xmp() {
+    let dir = temp_dir("export-noloc-psd-invalid-utf8");
+    let path = dir.join("Invalid.psd");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let xmp = lightcraft_meta::write_xmp(&gps, None);
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let embedded = lightcraft_codecs::EncodeMeta { xmp: Some(&xmp), ..Default::default() };
+    let mut bytes = lightcraft_codecs::encode_psd(&image, &embedded).unwrap();
+    assert_eq!(lightcraft_meta::extract(&bytes).gps, gps.gps);
+    let latitude = bytes.windows(2).position(|bytes| bytes == b"45").unwrap();
+    bytes[latitude] = 0xff;
+    assert!(lightcraft_meta::extract(&bytes).gps.is_none());
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_unreadable_resources() {
+    let dir = temp_dir("export-noloc-psd-malformed");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let path = dir.join("Geo.psd");
+    let valid_bytes = synthetic_psd_with_metadata(&gps);
+    assert_eq!(lightcraft_meta::extract(&valid_bytes).gps, gps.gps, "the fixture embeds EXIF GPS before corruption");
+    let mut bytes = valid_bytes;
+    let colour_length = usize::try_from(u32::from_be_bytes(bytes[26..30].try_into().unwrap())).unwrap();
+    let resource_length_at = 30 + colour_length;
+    let resource_length = usize::try_from(u32::from_be_bytes(bytes[resource_length_at..resource_length_at + 4].try_into().unwrap())).unwrap();
+    let resource_start = resource_length_at + 4;
+    let resource_end = resource_start + resource_length;
+    bytes.splice(resource_end..resource_end, *b"BAD!");
+    bytes[resource_length_at..resource_length_at + 4].copy_from_slice(&u32::try_from(resource_length + 4).unwrap().to_be_bytes());
+
+    assert!(lightcraft_meta::extract(&bytes).gps.is_none(), "the malformed trailing resource reproduces the metadata gap");
+    std::fs::write(&path, bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -858,4 +1107,99 @@ mod apple_photos {
         assert_eq!(s.apple_photos.is_some(), cfg!(target_os = "macos"));
         assert_eq!(s.commands().into_iter().find(|c| c.id == "export.addToPhotos").unwrap().enabled, cfg!(target_os = "macos"));
     }
+}
+
+/// Issue #956: "Same folder as original photo" puts each photo's export next to its own original
+/// (plus the subfolder), so one batch from two folders lands in two folders. The conflict policy
+/// and the original guard work per folder as they do for a specific folder.
+#[test]
+fn same_folder_as_original_exports_next_to_each_photo() {
+    use crate::export::{Conflict, Destination, DestinationMode};
+    let dir = temp_dir("export-same-folder");
+    let (a, b) = (dir.join("A"), dir.join("B"));
+    // two different photos (the same bytes would be imported once)
+    let jpeg = |blue: u8| {
+        let img = lightcraft_raster::Rgba8::from_fn(48, 32, |x, y| [(x * 5) as u8, (y * 7) as u8, blue, 255]);
+        crate::export::encode_image(&img, &ExportOptions::default()).unwrap()
+    };
+    let originals = [(&a, jpeg(120)), (&b, jpeg(30))];
+    for (d, bytes) in &originals {
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::write(d.join("IMG_1.jpg"), bytes).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    let paths = [a.join("IMG_1.jpg").to_string_lossy().to_string(), b.join("IMG_1.jpg").to_string_lossy().to_string()];
+    s.execute("library.import", &json!({"paths": paths})).unwrap();
+    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
+    assert_eq!(ids.len(), 2);
+    // the folder of a specific-folder export is not used
+    let to = Destination { dir: dir.join("unused").to_string_lossy().to_string(), exact: None };
+    let o = ExportOptions { destination_mode: DestinationMode::SameAsOriginal, subfolder: "Exports".into(), ..Default::default() };
+    let exists = |p: &str| std::path::Path::new(p).exists();
+    let files = crate::export::export_batch(&mut s, &ids, &o, &to, &mut crate::export::write_file, &exists).unwrap();
+    let written: Vec<&str> = files.iter().map(|f| f["path"].as_str().unwrap()).collect();
+    // `export` joins the subfolder and name with `/` (`join_path`), on Windows too.
+    let mut want = vec![format!("{}/Exports/IMG_1.jpg", a.to_string_lossy()), format!("{}/Exports/IMG_1.jpg", b.to_string_lossy())];
+    let mut got: Vec<String> = written.iter().map(|p| p.to_string()).collect();
+    want.sort();
+    got.sort();
+    assert_eq!(got, want);
+    assert!(!dir.join("unused").exists(), "nothing written to the specific folder");
+    // again: each folder's own collision gets the next free name
+    let files = crate::export::export_batch(&mut s, &ids, &o, &to, &mut crate::export::write_file, &exists).unwrap();
+    assert!(files.iter().all(|f| f["path"].as_str().unwrap().ends_with("Exports/IMG_1-2.jpg")), "{files:?}");
+    // no subfolder: next to the original, which is never written over
+    let beside = ExportOptions { subfolder: String::new(), conflict: Conflict::Overwrite, ..o.clone() };
+    let err = crate::export::export_batch(&mut s, &ids, &beside, &to, &mut crate::export::write_file, &exists).unwrap_err();
+    assert!(err.contains("original of IMG_1.jpg"), "{err}");
+    let unique = ExportOptions { conflict: Conflict::Unique, ..beside };
+    let files = crate::export::export_batch(&mut s, &ids, &unique, &to, &mut crate::export::write_file, &exists).unwrap();
+    assert!(files.iter().all(|f| f["path"].as_str().unwrap().ends_with("IMG_1-2.jpg")), "{files:?}");
+    for (d, bytes) in &originals {
+        assert_eq!(&std::fs::read(d.join("IMG_1.jpg")).unwrap(), bytes, "the original is untouched");
+        assert!(d.join("IMG_1-2.jpg").exists());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #956: a photo with no folder on disk (a demo photo) or whose folder is gone gets its own
+/// error in "Same folder as original photo" mode instead of a file written somewhere else.
+#[test]
+fn same_folder_as_original_refuses_photos_without_a_folder() {
+    use crate::export::{Destination, DestinationMode};
+    let o = ExportOptions { destination_mode: DestinationMode::SameAsOriginal, subfolder: "Exports".into(), ..Default::default() };
+    let to = Destination { dir: "out".into(), exact: None };
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    let mut written = Vec::new();
+    // the writer lives in a block of its own, so its borrow of `written` has ended by the time
+    // the assertion below reads it
+    let files = {
+        let mut write = |p: &str, _: &[u8]| -> Result<(), String> {
+            written.push(p.to_string());
+            Ok(())
+        };
+        let err = crate::export::export_batch(&mut s, &ids, &o, &to, &mut write, &|_| false).unwrap_err();
+        assert!(err.contains("no folder on disk"), "{err}");
+        // without stopping: one error per photo, nothing written
+        let items = crate::export::prepare_batch(&mut s, &ids, &o).unwrap();
+        crate::export::run_batch(items, &o, &to, &mut write, &|_| false, false, &mut |_, _| true).unwrap()
+    };
+    assert_eq!(files.len(), 2);
+    for (f, id) in files.iter().zip(&ids) {
+        assert_eq!(f["photo"], id.0, "{f}");
+        assert!(f["error"].as_str().unwrap().contains("no folder on disk"), "{f}");
+    }
+    assert!(written.is_empty(), "{written:?}");
+
+    // a photo on disk whose folder is gone (moved, an unplugged drive)
+    let (mut s, id, dir, _src, _) = library_with_jpeg("export-same-folder-gone");
+    let items = crate::export::prepare_batch(&mut s, &[id], &o).unwrap();
+    let gone = dir.to_string_lossy().to_string();
+    let exists = |p: &str| p != gone && !p.starts_with(&format!("{gone}/"));
+    let mut write = |p: &str, _: &[u8]| -> Result<(), String> { Err(format!("wrote {p}")) };
+    let files = crate::export::run_batch(items, &o, &to, &mut write, &exists, false, &mut |_, _| true).unwrap();
+    let e = files[0]["error"].as_str().unwrap();
+    assert!(e.contains("folder is missing") && e.contains(&gone), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
