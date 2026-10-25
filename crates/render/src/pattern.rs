@@ -71,6 +71,11 @@ const TILES: &[(&str, [u8; 8])] = &[
     ("zigZag", [0x81, 0x42, 0x24, 0x18, 0x81, 0x42, 0x24, 0x18]),
 ];
 
+/// Every preset name, in the order of the tiles.
+pub fn presets() -> impl Iterator<Item = &'static str> {
+    TILES.iter().map(|(n, _)| *n)
+}
+
 /// The 8×8 tile of preset `name` (`pct50` for an unknown name).
 pub fn tile(name: &str) -> [u8; 8] {
     TILES
@@ -109,7 +114,10 @@ pub fn fill(ctx: &mut RenderContext, name: &str, fg: Rgba, bg: Rgba, alpha: f64,
         sampler: peniko::ImageSampler {
             x_extend: peniko::Extend::Repeat,
             y_extend: peniko::Extend::Repeat,
-            quality: peniko::ImageQuality::Low,
+            // Bilinear, as PowerPoint samples the tile: exact at a whole number of output pixels
+            // per cell; between, a pixel straddling two cells takes a blend of both (fitted to its
+            // export at 0.75 px per cell: mean error 0.067 against 0.082 for the nearest cell).
+            quality: peniko::ImageQuality::Medium,
             alpha: 1.0,
         },
     });

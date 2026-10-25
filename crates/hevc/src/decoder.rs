@@ -88,6 +88,8 @@ pub struct Decoder {
     pool: Option<rayon::ThreadPool>,
     in_flight: VecDeque<FrameRef>,
     max_in_flight: usize,
+    /// Bytes the picture store may take ([`deckcraft_bitstream::budget`]).
+    memory_budget: u64,
     draft: bool,
 }
 
@@ -142,6 +144,7 @@ impl Decoder {
             pool,
             in_flight: VecDeque::new(),
             max_in_flight: threads.max(1) + 2,
+            memory_budget: deckcraft_bitstream::budget::DECODE_MEMORY_BUDGET,
             draft: false,
         }
     }
@@ -372,7 +375,34 @@ impl Decoder {
         Ok(())
     }
 
+    /// Cap the bytes of decoded pictures (current, references, in flight) this decoder may hold.
+    pub fn set_memory_budget(&mut self, bytes: u64) {
+        self.memory_budget = bytes;
+    }
+
+    /// Refuse an SPS whose pictures would not fit the memory budget, before anything is allocated.
+    fn check_budget(&self, sps: &Sps) -> Result<()> {
+        let chroma = sps.chroma_array_type();
+        let shape = deckcraft_bitstream::budget::PictureShape {
+            width: u64::from(sps.width),
+            height: u64::from(sps.height),
+            shift_x: u32::from(sps.sub_width_c() == 2),
+            shift_y: u32::from(sps.sub_height_c() == 2),
+            chroma_planes: if chroma == 0 { 0 } else { 2 },
+            bytes_per_sample: 2,
+        };
+        let pictures = u64::from(sps.max_dec_pic_buffering) + 1 + self.max_in_flight as u64;
+        ensure!(
+            shape.fits(pictures, self.memory_budget),
+            "{}x{} pictures with {pictures} in the decoder exceed the memory budget",
+            sps.width,
+            sps.height
+        );
+        Ok(())
+    }
+
     fn start_picture(&mut self, sh: &SliceHeader, sps: &Arc<Sps>, pps: &Arc<Pps>, pts: i64) -> Result<()> {
+        self.check_budget(sps)?;
         ensure!(sh.first_slice_segment_in_pic && !sh.dependent, "invalid first slice segment");
         let hdr = sh.nal;
         let changed = match &self.active_sps {
@@ -410,11 +440,22 @@ impl Decoder {
         let template = Frame::new(0, 0, w, h, sps.log2_ctb, sps.bit_depth_luma, sps.bit_depth_chroma);
         let next_id = &mut self.next_id;
         let mut missing = 0u64;
+        let max_missing = (sps.max_dec_pic_buffering as u64).clamp(1, 16);
+        let mut shared_gray: Option<FrameRef> = None;
         let mut make_missing = |p: i32| -> FrameRef {
             missing += 1;
+            if missing > max_missing
+                && let Some(ref g) = shared_gray
+            {
+                return g.clone();
+            }
             let id = *next_id;
             *next_id += 1;
-            Arc::new(Frame::gray(id, p, &template))
+            let f = Arc::new(Frame::gray(id, p, &template));
+            if shared_gray.is_none() {
+                shared_gray = Some(f.clone());
+            }
+            f
         };
         let rps = self.dpb.apply_rps(sh, poc, max_lsb, irap_no_rasl, &mut make_missing)?;
         if missing > 0 {
