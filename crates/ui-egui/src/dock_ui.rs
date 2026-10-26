@@ -17,8 +17,9 @@ fn floating_rect(group: &dock::Floating, screen: Rect) -> Rect {
     ))
 }
 
+/// The single stable id holding an in-flight docked-panel drag across frames.
 fn drag_id() -> egui::Id {
-    egui::Id::new("dock-panel-drag")
+    egui::Id::unique("dock-panel-drag")
 }
 
 pub(crate) fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -48,7 +49,6 @@ pub(crate) fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, param
                 Action::Float { panel, rect }
             }
             _ => {
-                let anchor = params.get("anchor").and_then(Value::as_str).and_then(PanelKind::from_name).ok_or("a known anchor panel is required")?;
                 let zone_name = match params.get("zone") {
                     None => "center",
                     Some(value) => value.as_str().ok_or("zone must be a string")?,
@@ -61,6 +61,14 @@ pub(crate) fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, param
                     "center" | "tab" => Zone::Center,
                     _ => return Err("unknown docking zone".into()),
                 };
+                let Some(anchor) = params.get("anchor") else {
+                    if params.get("before").is_some() {
+                        return Err("before needs an anchor panel".into());
+                    }
+                    app.dock_to_edge(panel, zone)?;
+                    return Ok(json!({"panel": panel.id()}));
+                };
+                let anchor = anchor.as_str().and_then(PanelKind::from_name).ok_or("a known anchor panel is required")?;
                 let placement = match params.get("before") {
                     Some(value) => Placement::Tab { before: Some(value.as_str().and_then(PanelKind::from_name).ok_or("unknown before panel")?) },
                     None => Placement::Split(zone),
@@ -90,22 +98,47 @@ impl FilmcraftApp {
             Action::Activate { panel } => Some(*panel),
             _ => None,
         };
-        let mut shared = crate::dock_shared::encode(&self.ui.dock, &self.ui.floating)?;
-        shared.validate().map_err(|error| error.to_string())?;
-        crate::dock_shared::check_last_docked(&shared, &action)?;
-        shared.apply(action).map_err(|error| error.to_string())?;
-        let layout = crate::dock_shared::decode(shared)?;
-        crate::dock_shared::encode(&layout.root, &layout.floating)?;
-        self.ui.dock = layout.root;
-        self.ui.floating = layout.floating;
+        // a panel closed while floating remembers where; closed while docked, it forgets (#1985)
+        let closing = match &action {
+            Action::Close { panel } => Some((*panel, self.ui.floating.iter().find(|g| g.panels.contains(panel)).map(|g| g.rect))),
+            _ => None,
+        };
+        self.commit_dock(|shared| {
+            crate::dock_shared::check_last_docked(shared, &action)?;
+            shared.apply(action).map_err(|error| error.to_string())
+        })?;
         if let Some(panel) = reveal {
             self.pending_panel_raise = Some(panel);
+        }
+        if let Some((panel, rect)) = closing {
+            self.ui.closed_floating.retain(|(p, _)| *p != panel);
+            if let Some(rect) = rect {
+                self.ui.closed_floating.push((panel, rect));
+            }
         }
         if relocating
             || self.ui.keys.maximized.is_some_and(|panel| !self.ui.dock.contains(panel) && !self.ui.floating.iter().any(|group| group.panels.contains(&panel)))
         {
             self.ui.keys.maximized = None;
         }
+        Ok(())
+    }
+
+    /// Dock a panel along an edge of the whole workspace rather than beside one group.
+    pub fn dock_to_edge(&mut self, panel: PanelKind, zone: Zone) -> Result<(), String> {
+        self.commit_dock(|shared| crate::dock_shared::dock_at_edge(shared, panel, zone))?;
+        self.ui.keys.maximized = None;
+        Ok(())
+    }
+
+    fn commit_dock(&mut self, change: impl FnOnce(&mut craft_ui::docking::Layout<PanelKind>) -> Result<(), String>) -> Result<(), String> {
+        let mut shared = crate::dock_shared::encode(&self.ui.dock, &self.ui.floating)?;
+        shared.validate().map_err(|error| error.to_string())?;
+        change(&mut shared)?;
+        let layout = crate::dock_shared::decode(shared)?;
+        crate::dock_shared::encode(&layout.root, &layout.floating)?;
+        self.ui.dock = layout.root;
+        self.ui.floating = layout.floating;
         Ok(())
     }
 
@@ -138,6 +171,7 @@ impl FilmcraftApp {
         true
     }
 
+    /// Floating group indexes in layer z-order; groups without a layer sort last.
     fn floating_order(&self, ctx: &egui::Context) -> Vec<usize> {
         let layers = ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>());
         let mut order: Vec<_> = (0..self.ui.floating.len()).collect();
@@ -147,7 +181,7 @@ impl FilmcraftApp {
                 .get(*index)
                 .and_then(|group| group.panels.first())
                 .and_then(|panel| {
-                    let id = egui::Id::new(("floating-panel", panel.id()));
+                    let id = egui::Id::unique(("floating-panel", panel.id()));
                     layers.iter().position(|layer| layer.id == id)
                 })
                 .unwrap_or(usize::MAX)
@@ -155,13 +189,15 @@ impl FilmcraftApp {
         order
     }
 
+    /// Lay out the dock area and floating groups; while a panel is maximized a temporary one-panel tree is drawn and the saved dock is left untouched, and a
+    /// pending panel raise moves its floating layer to the top.
     pub(crate) fn dock_area(&mut self, ui: &mut egui::Ui, body: Rect) {
         let t = self.tokens;
         let ctx = ui.ctx().clone();
         if let Some(panel) = self.pending_panel_raise.take()
             && let Some(owner) = self.ui.floating.iter().find(|group| group.panels.contains(&panel)).and_then(|group| group.panels.first())
         {
-            ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, egui::Id::new(("floating-panel", owner.id()))));
+            ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, egui::Id::unique(("floating-panel", owner.id()))));
         }
         let maximized =
             self.ui.keys.maximized.filter(|panel| self.ui.dock.contains(*panel) || self.ui.floating.iter().any(|group| group.panels.contains(panel)));
@@ -250,23 +286,24 @@ impl FilmcraftApp {
                 DockAction::PanelMenu(panel, pos) => {
                     let frame = ctx.cumulative_frame_nr();
                     ctx.data_mut(|data| {
-                        data.insert_temp(egui::Id::new("panel-menu"), (panel, pos));
-                        data.insert_temp(egui::Id::new("panel-menu-opened"), frame);
+                        data.insert_temp(egui::Id::unique("panel-menu"), (panel, pos));
+                        data.insert_temp(egui::Id::unique("panel-menu-opened"), frame);
                     });
                 }
             }
         }
-        self.panel_drag(&ctx, &targets);
+        self.panel_drag(&ctx, body, &targets);
         panels::panel_menu_popup(self, ui);
-        self.cancel_value_drag(ui.ctx());
     }
 
+    /// Draw one floating group on the middle layer, clamped on-screen with a minimum size; register its move/resize automation ids and submit `MoveFloating`
+    /// for a drag or resize.
     fn floating_group(&mut self, ctx: &egui::Context, index: usize, seqs: &dock::SeqTabs, actions: &mut Vec<DockAction>) -> Option<DropTarget<PanelKind>> {
         let floating = self.ui.floating.get(index)?.clone();
         let panel = *floating.panels.first()?;
         let rect = floating_rect(&floating, ctx.content_rect());
         let t = self.tokens;
-        let id = egui::Id::new(("floating-panel", panel.id()));
+        let id = egui::Id::unique(("floating-panel", panel.id()));
         let mut output = None;
         egui::Area::new(id).order(egui::Order::Middle).fixed_pos(rect.min).constrain(false).interactable(true).show(ctx, |ui| {
             let (rect, _) = ui.allocate_exact_size(rect.size(), Sense::hover());
@@ -291,7 +328,7 @@ impl FilmcraftApp {
             ui.painter().rect_stroke(rect, t.radius, Stroke::new(1.0, t.focus), StrokeKind::Outside);
             let grip = Rect::from_min_max(rect.max - vec2(14.0, 14.0), rect.max);
             let response = ui.interact(grip, id.with("resize"), Sense::click_and_drag());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), tl!("Resize floating panel")));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), tl!("Resize floating panel")));
             self.auto.add_response(&format!("panel.float.{index}.resize"), &response, "Resize floating panel");
             for step in 0..3 {
                 let offset = 4.0 + step as f32 * 4.0;
@@ -317,7 +354,9 @@ impl FilmcraftApp {
         output
     }
 
-    fn panel_drag(&mut self, ctx: &egui::Context, targets: &[DropTarget<PanelKind>]) {
+    /// Continue a docked panel drag: cancel on Escape, focus loss or an absent press/release, discard stale panel ids, prefer workspace-edge drops, and treat
+    /// Command as force-float.
+    fn panel_drag(&mut self, ctx: &egui::Context, body: Rect, targets: &[DropTarget<PanelKind>]) {
         let Some(panel) = ctx.data(|data| data.get_temp::<PanelKind>(drag_id())) else { return };
         let canceled =
             ctx.input(|input| input.key_pressed(egui::Key::Escape) || !input.focused || (!input.pointer.primary_down() && !input.pointer.primary_released()));
@@ -327,9 +366,14 @@ impl FilmcraftApp {
         }
         let Some(pos) = ctx.pointer_latest_pos() else { return };
         let force_float = ctx.input(|input| input.modifiers.command);
-        let proposal = (!force_float).then(|| resolve_drop(&panel, pos, targets)).flatten();
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("dock-drop")));
+        let edge = (!force_float).then(|| workspace_edge(body, pos, targets)).flatten();
+        let proposal = (!force_float && edge.is_none()).then(|| resolve_drop(&panel, pos, targets)).flatten();
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dock-drop")));
         let t = self.tokens;
+        if let Some((_, _, preview)) = edge {
+            painter.rect_filled(preview.shrink(2.0), t.radius, t.focus.gamma_multiply(0.2));
+            painter.rect_stroke(preview.shrink(2.0), t.radius, Stroke::new(2.0, t.focus), StrokeKind::Inside);
+        }
         if let Some(proposal) = &proposal {
             painter.rect_filled(proposal.preview.shrink(2.0), t.radius, t.focus.gamma_multiply(0.2));
             painter.rect_stroke(proposal.preview.shrink(2.0), t.radius, Stroke::new(2.0, t.focus), StrokeKind::Inside);
@@ -345,6 +389,12 @@ impl FilmcraftApp {
         ctx.request_repaint();
         if ctx.input(|input| input.pointer.primary_released()) {
             ctx.data_mut(|data| data.remove::<PanelKind>(drag_id()));
+            if let Some((_, zone, _)) = edge {
+                if crate::menus::invoke(self, ctx, "window.dockPanel", json!({"panel": panel.id(), "zone": zone})).is_ok() {
+                    self.ui.focused = panel;
+                }
+                return;
+            }
             let action = match proposal {
                 Some(proposal) => Some(Action::Move { panel, anchor: proposal.anchor, placement: proposal.placement }),
                 None if force_float || !targets.iter().any(|target| target.rect.contains(pos)) => {
@@ -359,6 +409,36 @@ impl FilmcraftApp {
             }
         }
     }
+}
+
+/// Width of the band along the workspace border that docks beside the whole layout.
+const EDGE_BAND: f32 = 8.0;
+
+/// The outermost drop zone: near the workspace border a drop splits the root, not the group
+/// under the pointer. A floating group over the border (it rejects splits) keeps the drop.
+fn workspace_edge(body: Rect, pos: egui::Pos2, targets: &[DropTarget<PanelKind>]) -> Option<(Zone, &'static str, Rect)> {
+    if !body.is_finite() || !body.contains(pos) || targets.iter().any(|target| !target.allow_splits && target.rect.contains(pos)) {
+        return None;
+    }
+    let band = EDGE_BAND.min(body.width() / 4.0).min(body.height() / 4.0);
+    let edges = [
+        (pos.x - body.left(), Zone::Left, "left"),
+        (body.right() - pos.x, Zone::Right, "right"),
+        (pos.y - body.top(), Zone::Top, "top"),
+        (body.bottom() - pos.y, Zone::Bottom, "bottom"),
+    ];
+    let (distance, zone, name) = edges.into_iter().min_by(|a, b| a.0.total_cmp(&b.0))?;
+    if distance > band {
+        return None;
+    }
+    let size = body.size() * 0.25;
+    let preview = match zone {
+        Zone::Left => Rect::from_min_size(body.min, vec2(size.x, body.height())),
+        Zone::Right => Rect::from_min_max(pos2(body.right() - size.x, body.top()), body.max),
+        Zone::Top => Rect::from_min_size(body.min, vec2(body.width(), size.y)),
+        Zone::Bottom | Zone::Center => Rect::from_min_max(pos2(body.left(), body.bottom() - size.y), body.max),
+    };
+    Some((zone, name, preview))
 }
 
 fn target(group: &Group, mut tabs: Vec<(PanelKind, Rect)>, allow_splits: bool) -> Option<DropTarget<PanelKind>> {
