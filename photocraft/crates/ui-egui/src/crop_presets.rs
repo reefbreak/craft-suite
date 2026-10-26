@@ -109,7 +109,7 @@ pub fn savable(o: &ToolOptions) -> Option<(Map<String, Value>, String)> {
     if !(a.is_finite() && b.is_finite() && a > 0.0 && b > 0.0) {
         return None;
     }
-    let name = format!("{} : {}", crate::widgets::fmt_num(a), crate::widgets::fmt_num(b));
+    let name = format!("{} : {}", crop_size::fmt_ratio(a), crop_size::fmt_ratio(b));
     let mut fields = Map::new();
     fields.insert("crop_ratio".into(), json!(o.crop_ratio));
     Some((fields, name))
@@ -142,31 +142,35 @@ pub fn dropdown(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current_user = users.iter().rev().find(|(_, f)| matches(o, f)).map(|(n, _)| n.clone());
     let can_new = savable(o).is_some();
     let mut chosen: Option<Choice> = None;
-    egui::ComboBox::from_id_salt("crop-ratio").selected_text(label).width(140.0).height(420.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
-        let (before, after): (Vec<_>, Vec<_>) = builtin.iter().partition(|(k, _)| k != crop_size::FRONT);
-        for (k, l) in &before {
-            if ui.selectable_label(current_user.is_none() && *k == o.crop_ratio, tl!(l)).clicked() {
-                chosen = Some(Choice::Builtin(k.clone()));
+    let parent_layer = ui.layer_id();
+    let combo =
+        egui::ComboBox::from_id_salt("crop-ratio").selected_text(label).width(140.0).height(420.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
+            crate::press_menu::above_parent_ui(parent_layer, ui);
+            let (before, after): (Vec<_>, Vec<_>) = builtin.iter().partition(|(k, _)| k != crop_size::FRONT);
+            for (k, l) in &before {
+                if ui.selectable_label(current_user.is_none() && *k == o.crop_ratio, tl!(l)).clicked() {
+                    chosen = Some(Choice::Builtin(k.clone()));
+                }
             }
-        }
-        for (name, _) in &users {
-            if ui.selectable_label(current_user.as_deref() == Some(name), name.as_str()).clicked() {
-                chosen = Some(Choice::User(name.clone()));
+            for (name, _) in &users {
+                if ui.selectable_label(current_user.as_deref() == Some(name), name.as_str()).clicked() {
+                    chosen = Some(Choice::User(name.clone()));
+                }
             }
-        }
-        for (k, l) in &after {
-            if ui.selectable_label(false, tl!(l)).clicked() {
-                chosen = Some(Choice::Builtin(k.clone()));
+            for (k, l) in &after {
+                if ui.selectable_label(false, tl!(l)).clicked() {
+                    chosen = Some(Choice::Builtin(k.clone()));
+                }
             }
-        }
-        ui.separator();
-        if ui.add_enabled(can_new, egui::Button::selectable(false, tl!("New Crop Preset…"))).clicked() {
-            chosen = Some(Choice::New);
-        }
-        if ui.add_enabled(!users.is_empty(), egui::Button::selectable(false, tl!("Delete Crop Preset…"))).clicked() {
-            chosen = Some(Choice::Delete);
-        }
-    });
+            ui.separator();
+            if ui.add_enabled(can_new, egui::Button::selectable(false, tl!("New Crop Preset…"))).clicked() {
+                chosen = Some(Choice::New);
+            }
+            if ui.add_enabled(!users.is_empty(), egui::Button::selectable(false, tl!("Delete Crop Preset…"))).clicked() {
+                chosen = Some(Choice::Delete);
+            }
+        });
+    let _ = combo.response.accessible_name(tl!("Aspect Ratio"));
     match chosen {
         Some(Choice::Builtin(k)) => {
             app.ui.tool_options.crop_ratio = k;
@@ -263,10 +267,10 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Val
 
 fn new_body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let mut name = fields.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-    let id = ui.id().with("crop-preset-name");
+    let id = ui.scope_id().with("crop-preset-name");
     ui.horizontal(|ui| {
-        ui.label(tl!("Name:"));
-        let r = ui.add(egui::TextEdit::singleline(&mut name).id(id).char_limit(MAX_NAME).desired_width(260.0));
+        let name_label = ui.label(tl!("Name:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut name).id(id).char_limit(MAX_NAME).desired_width(260.0)).labelled_by(name_label.id);
         // Photoshop focuses the name with all of it selected, so typing replaces it.
         let once = id.with("focused");
         if !ui.ctx().data(|d| d.get_temp::<bool>(once).unwrap_or(false)) {
