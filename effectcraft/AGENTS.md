@@ -79,7 +79,11 @@ reproduce an image (for example, point lists traced from someone else's icon).
 8. **The one exception: first-party ArtCraft brand marks.** The ArtCraft name and logos in `docs/brand/`
    are trademarks of the ArtCraft Team, not open source, usable only unmodified and only in the context of
    EffectCraft under `docs/brand/LICENSE-brand.txt` (forks and modified versions must remove them). They still
-   need a sidecar and an `ATTRIBUTION.md` row (licence `LicenseRef-ArtCraft-Trademark`). No other
+   need a sidecar and an `ATTRIBUTION.md` row (licence `LicenseRef-ArtCraft-Trademark`). **This
+   checkout is a modified build (Gesso craft-suite), so the mark files have been removed** (see
+   `docs/brand/README.md`): do not add them back, do not draw the mark in the UI, and do not
+   present the app as an ArtCraft product; plain text such as "based on EffectCraft by the ArtCraft
+   team" is fine. No other
    non-open asset is allowed, and this exception never covers third-party marks (Adobe, Discord, GitHub
    and other logos stay out; draw a generic icon instead).
 

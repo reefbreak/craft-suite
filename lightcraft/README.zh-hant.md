@@ -1,11 +1,7 @@
-<p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
-</p>
+> **修改版建置。** 此 LightCraft 副本是 Gesso craft-suite 中的修改版建置，不是 LightCraft 或 ArtCraft
+> 的官方發布版，也不由 ArtCraft 團隊製作、贊助或支援。它基於 ArtCraft 團隊的 LightCraft（上游專案）；
+> 依 [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) 的要求，ArtCraft 標誌已被移除。
+> 本 README 的其餘部分描述的是上游專案，其中的連結指向上游 LightCraft。
 
 
 <h1 align="center">LightCraft</h1>
@@ -32,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
+  <a href="https://discord.gg/artcraft"><img alt="Upstream LightCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
 
 <p align="center">
@@ -574,7 +570,7 @@ LightCraft 是 **Crafting Apps** 之一：來自 [ArtCraft](https://getartcraft.
 <br>
 
 <p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
+  <a href="https://discord.gg/artcraft"><img alt="Upstream LightCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
 
 <h3 align="center">Come make things with us</h3>
@@ -610,16 +606,15 @@ Inter（SIL OFL 1.1）。使用 [craft-fonts](https://github.com/storytold/craft
 還會內嵌其中文與日文字型（Noto Sans CJK SC、BIZ UDPGothic、BIZ UDMincho、Shippori Mincho；SIL OFL 1.1），列於其
 [ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md) 中。所有圖示皆為原創。
 
-[`docs/brand/`](docs/brand/) 中的 ArtCraft 名稱、字標與標誌是
-ArtCraft 團隊的商標，不在本授權範圍內。它們只能以未經修改的形式，作為
-本儲存庫與 LightCraft 的一部分，依 [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) 使用。
-分支與修改版本必須移除它們。
+ArtCraft 名稱、字標與標誌是 ArtCraft 團隊的商標，不在本授權範圍內
+（[`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)）。分支與修改版本必須移除它們，
+因此本修改版建置不包含任何標誌檔案（見 [`docs/brand/README.md`](docs/brand/README.md)）；
+該名稱僅以純文字出現，用於說明 LightCraft 的來源。
 
 <sub>Adobe、Photoshop、Illustrator、Premiere Pro、Lightroom、Acrobat、After Effects 與 InDesign 是 Adobe Inc. 在美國及／或其他國家的商標或註冊商標。LightCraft 是一個獨立的開源專案，與 Adobe Inc. 沒有任何關係，也未獲其贊助或認可；這些名稱僅用於說明它所相容的工作流程。</sub>
 
 <p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
-  <sub>由 <a href="https://getartcraft.com/">ArtCraft</a> 團隊與社群製作。</sub>
+  <sub>上游 LightCraft 由 <a href="https://getartcraft.com/">ArtCraft</a> 團隊與社群製作。本修改版建置並非如此。</sub>
 </p>
 
 ## Star history

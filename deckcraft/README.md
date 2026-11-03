@@ -1,11 +1,8 @@
-<p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
-</p>
+> **Modified build.** This copy of DeckCraft is a modified build in the Gesso craft-suite. It is not
+> an official DeckCraft or ArtCraft release and is not made, sponsored or supported by the ArtCraft
+> team. It is based on DeckCraft by the ArtCraft team (upstream project); the ArtCraft logos have been
+> removed as [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) requires. The rest of
+> this README describes the upstream project; its links go to upstream DeckCraft.
 
 <p align="center">
   <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.deckcraft.png" width="128" height="128" alt="DeckCraft icon: a presentation screen with a bar chart on an orange tile">
@@ -35,7 +32,7 @@
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
+  <a href="https://discord.gg/artcraft"><img alt="Upstream DeckCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
 
 <p align="center">
@@ -293,7 +290,7 @@ And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video stud
 <br>
 
 <p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
+  <a href="https://discord.gg/artcraft"><img alt="Upstream DeckCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
 
 <h3 align="center">Come make things with us</h3>
@@ -323,12 +320,12 @@ with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
 DeckCraft's themes, layouts, shape geometry, icons and sample decks are original work, drawn or
 generated in code; no proprietary artwork, fonts, themes or templates are used.
 
-The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
-ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
-part of this repository and DeckCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
-Forks and modified versions must remove them.
+The ArtCraft name, wordmark and logos are trademarks of the ArtCraft Team and are not covered by
+this license ([`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)). Forks and modified
+versions must remove them, so this modified build ships none of the logo files (see
+[`docs/brand/README.md`](docs/brand/README.md)); the name appears only in plain text, to say where
+DeckCraft comes from.
 
 <p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
-  <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
+  <sub>Upstream DeckCraft is made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community. This modified build is not.</sub>
 </p>

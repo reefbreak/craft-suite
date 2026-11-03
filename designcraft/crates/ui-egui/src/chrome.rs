@@ -1426,7 +1426,8 @@ fn recent_preview_texture(ctx: &egui::Context, path: &str, modified: Option<std:
     tex
 }
 
-/// Start screen: the ArtCraft community (Discord first) and project links.
+/// Start screen: the ArtCraft community (Discord first) and project links, in plain text (this
+/// modified build draws no ArtCraft mark, docs/brand/README.md).
 fn community_card(app: &mut DesignApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.fill(t.panel).corner_radius(10.0).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
@@ -1435,9 +1436,6 @@ fn community_card(app: &mut DesignApp, ui: &mut egui::Ui) {
         const BUTTON: egui::Vec2 = vec2(190.0, 38.0);
         ui.set_max_width(760.0);
         ui.horizontal(|ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
-            crate::about::paint_mark(ui, r, crate::about::BRAND);
-            ui.add_space(8.0);
             let label = crate::i18n::tr(&app.ui.language, "Join our Discord");
             let button = crate::about::discord_button_size(ui.ctx(), label, BUTTON);
             let text_width = (ui.available_width() - button.x - 16.0).max(120.0);

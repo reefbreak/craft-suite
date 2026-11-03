@@ -1329,13 +1329,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     1 => crate::credits::contributors_ui(ui),
                     2 => crate::credits::models_ui(ui),
                     _ => {
-                        ui.horizontal(|ui| {
-                            widgets::artcraft_mark(ui, 40.0);
-                            ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("PdfCraft").font(theme::semibold(20.0)));
-                                ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", &pdfcraft_engine::build_info::version())]));
-                            });
-                        });
+                        // Name and version in plain text: this modified build carries no ArtCraft
+                        // marks (docs/brand/README.md).
+                        ui.label(egui::RichText::new("PdfCraft").font(theme::semibold(20.0)));
+                        ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", &pdfcraft_engine::build_info::version())]));
                         ui.add_space(6.0);
                         ui.label(tl!("A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0."));
                         ui.label(
@@ -1346,10 +1343,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                             .small(),
                         );
                         ui.add_space(12.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(tl!("Part of")).color(t.text_muted));
-                            widgets::artcraft_logo(ui, 16.0);
-                        });
+                        ui.label(
+                            egui::RichText::new(tl!(
+                                "Based on PdfCraft by the ArtCraft team. A modified build from the Gesso craft-suite, not an official PdfCraft or ArtCraft release."
+                            ))
+                            .color(t.text_muted),
+                        );
                         ui.add_space(6.0);
                         if let Some(cmd) = widgets::community_links(ui) {
                             link_command = Some(cmd);

@@ -1,11 +1,8 @@
-<p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
-</p>
+> **Modified build.** This copy of LightCraft is a modified build in the Gesso craft-suite. It is not
+> an official LightCraft or ArtCraft release and is not made, sponsored or supported by the ArtCraft
+> team. It is based on LightCraft by the ArtCraft team (upstream project); the ArtCraft logos have been
+> removed as [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) requires. The rest of
+> this README describes the upstream project; its links go to upstream LightCraft.
 
 
 <p align="center">
@@ -39,7 +36,7 @@
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
+  <a href="https://discord.gg/artcraft"><img alt="Upstream LightCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
 
 <p align="center">
@@ -624,7 +621,7 @@ And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video stud
 <br>
 
 <p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
+  <a href="https://discord.gg/artcraft"><img alt="Upstream LightCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
 
 <h3 align="center">Come make things with us</h3>
@@ -660,14 +657,14 @@ Inter (SIL OFL 1.1). Builds made with [craft-fonts](https://github.com/storytold
 also embed its Chinese and Japanese fonts (Noto Sans CJK SC, BIZ UDPGothic, BIZ UDMincho, Shippori Mincho; SIL OFL 1.1), listed in its
 [ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md). All icons are original.
 
-The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
-ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
-part of this repository and LightCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
-Forks and modified versions must remove them.
+The ArtCraft name, wordmark and logos are trademarks of the ArtCraft Team and are not covered by
+this license ([`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)). Forks and modified
+versions must remove them, so this modified build ships none of the logo files (see
+[`docs/brand/README.md`](docs/brand/README.md)); the name appears only in plain text, to say where
+LightCraft comes from.
 
 <p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
-  <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
+  <sub>Upstream LightCraft is made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community. This modified build is not.</sub>
 </p>
 
 ## Star history

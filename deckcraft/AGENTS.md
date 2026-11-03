@@ -52,7 +52,10 @@ domain; or contributor-original (created by a contributor who licenses it under
 
 One narrow exception: the ArtCraft name, wordmark and logos in `docs/brand/` are trademarks of the
 ArtCraft Team (not open source, terms in `docs/brand/LICENSE-brand.txt`), used only unmodified to
-identify the project.
+identify the project. This checkout is a modified build (Gesso craft-suite), so the logo files have
+been removed (`docs/brand/README.md`): do not add them back, do not draw them in the UI, and do not
+present the app as an ArtCraft product; plain text such as "based on DeckCraft by the ArtCraft
+team" is fine.
 
 Forbidden: system fonts that are not openly licensed, vendor emoji artwork, stock photos, "free
 for personal use" material, screenshots of other people's software, anything whose licence you

@@ -23,16 +23,21 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let cy = rect.center().y;
     let mut x = rect.min.x + if app.integrated_titlebar && !app.ui.show_menu_bar { 80.0 } else { 10.0 };
 
-    // Brand mark.
-    let brand = Rect::from_min_size(pos2(x, cy - 12.0), vec2(24.0, 24.0));
-    paint_logo(&p, brand);
+    // The app name in plain text, which opens About. (This modified build carries no ArtCraft
+    // marks: docs/brand/README.md.)
+    let name = p.layout_no_wrap("EffectCraft".to_string(), Tokens::semibold(13.0), t.text);
+    let brand = Rect::from_min_size(pos2(x, cy - 12.0), vec2(name.size().x + 8.0, 24.0));
     let bresp = ui.interact(brand, egui::Id::unique("brand"), Sense::click());
+    if bresp.hovered() {
+        p.rect_filled(brand, 4.0, t.hover);
+    }
+    p.galley(pos2(brand.min.x + 4.0, cy - name.size().y / 2.0), name, t.text);
     app.auto.add_response("header.about", &bresp, "About EffectCraft");
     widgets::focus_outline(ui, &bresp, &t);
     if bresp.on_hover_text(tr("About EffectCraft")).clicked() {
         app.dialog = Some(Dialog::About);
     }
-    x += 32.0;
+    x = brand.max.x + 8.0;
 
     // Home.
     let home = Rect::from_min_size(pos2(x, cy - 13.0), vec2(26.0, 26.0));
@@ -657,29 +662,6 @@ fn ws_menu(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
         let n = app.ui.workspace.clone();
         app.set_workspace(&n);
         ui.close();
-    }
-}
-
-/// The ArtCraft mark as supplied in `docs/brand` (the README's and getartcraft.com's logo; used
-/// unmodified, see `docs/brand/LICENSE-brand.txt`).
-static ARTCRAFT_MARK: &[u8] = include_bytes!("../../../docs/brand/artcraft-mark.png");
-
-/// The ArtCraft mark in `r` (decoded once into a mipmapped texture, so it stays crisp from the
-/// 24 px Tools bar to the About dialog). Nothing is drawn if it can't be decoded.
-pub fn paint_logo(p: &egui::Painter, r: Rect) {
-    let ctx = p.ctx();
-    let id = egui::Id::unique("artcraft-mark");
-    let tex = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)).unwrap_or_else(|| {
-        let tex = image::load_from_memory_with_format(ARTCRAFT_MARK, image::ImageFormat::Png).ok().map(|img| {
-            let img = img.to_rgba8();
-            let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
-            ctx.load_texture("artcraft-mark", ci, egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)))
-        });
-        ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
-        tex
-    });
-    if let Some(t) = tex {
-        p.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
 }
 

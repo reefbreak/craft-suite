@@ -11,7 +11,8 @@ CADCraft contributors or third-party material under an open licence (OSI open so
 committed. Font files are not added here: shared fonts live in
 [storytold/craft-fonts](https://github.com/storytold/craft-fonts), an optional build input. The one
 exception is the ArtCraft brand in `docs/brand/`: ArtCraft trademarks, not open source, used under
-`docs/brand/LICENSE-brand.txt`.
+`docs/brand/LICENSE-brand.txt`. This modified build (Gesso craft-suite) ships none of the ArtCraft
+logo files; see `docs/brand/README.md`.
 
 Generated-in-code assets are original and have no file to list:
 - the UI icon set (`crates/ui-egui/src/icons.rs`);
@@ -48,14 +49,7 @@ Generated-in-code assets are original and have no file to list:
 | `docs/images/ui-apartment.png` | CADCraft contributors | screenshot of CADCraft itself (examples/apartment.dxf) | MIT OR Apache-2.0 | Original; no Autodesk UI |
 | `docs/images/ui-layout.png` | CADCraft contributors | screenshot of CADCraft itself (a layout of examples/apartment.dxf) | MIT OR Apache-2.0 | Original; no Autodesk UI |
 | `docs/images/ui-bracket.png` | CADCraft contributors | screenshot of CADCraft itself (sample drawing generated in code) | MIT OR Apache-2.0 | Original; no Autodesk UI |
-| `docs/brand/artcraft-logo-white.png` | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
-| `docs/brand/artcraft-logo-white.svg` | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
-| `docs/brand/artcraft-logo.png` | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
-| `docs/brand/artcraft-logo.svg` | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
-| `docs/brand/artcraft-mark-black.png` | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
-| `docs/brand/artcraft-mark-black.svg` | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
-| `docs/brand/artcraft-mark.png` | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
-| `docs/brand/artcraft-mark.svg` | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
+| `docs/brand/LICENSE-brand.txt` | ArtCraft Team | storytold/craftrules | ArtCraft brand terms | Licence text only: the logo files were removed from this modified build (Gesso craft-suite), see `docs/brand/README.md` |
 
 ## Interface translations
 

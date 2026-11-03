@@ -225,7 +225,7 @@ fn theme_preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
     painter.rect_filled(rect, 3.0, p.app_bg);
     let bar = Rect::from_min_size(rect.min, vec2(rect.width(), 13.0));
     painter.rect_filled(bar, 0.0, p.header_bg);
-    // The brand mark, the tools (the Selection tool is active) and the Discord pill.
+    // The app name, the tools (the Selection tool is active) and the Discord pill.
     painter.rect_filled(Rect::from_min_size(bar.min + vec2(4.0, 3.0), vec2(7.0, 7.0)), 2.0, p.accent);
     for i in 0..7 {
         let c = if i == 0 { p.accent } else { p.icon };
