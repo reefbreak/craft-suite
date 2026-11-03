@@ -943,7 +943,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Page Numbering", "Číslování stránek"),
     ("Page layout for print and screen — fast, open and scriptable.", "Sazba stránek pro tisk i obrazovku — rychlá, otevřená a skriptovatelná."),
     ("Page · PPI", "Stránka · PPI"),
-    ("Part of the ArtCraft suite of open creative tools.", "Součást ArtCraft, sady otevřených kreativních nástrojů."),
+    ("Based on DesignCraft by the ArtCraft team; a modified build from the Gesso craft-suite.", "Vychází z DesignCraftu od týmu ArtCraft; upravené sestavení z Gesso craft-suite."),
     ("Pasteboard Options", "Možnosti montážní plochy"),
     ("Paths", "Cesty"),
     ("Place the insertion point in a table, or create one.", "Umístěte textový kurzor do tabulky nebo nějakou vytvořte."),

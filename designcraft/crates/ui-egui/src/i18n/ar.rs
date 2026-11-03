@@ -1147,7 +1147,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Page Numbering", "ترقيم الصفحات"),
     ("Page · PPI", "صفحة · PPI"),
     ("Pages:", "الصفحات:"),
-    ("Part of the ArtCraft suite of open creative tools.", "جزء من مجموعة ArtCraft للأدوات الإبداعية المفتوحة."),
+    ("Based on DesignCraft by the ArtCraft team; a modified build from the Gesso craft-suite.", "مبني على DesignCraft من فريق ArtCraft؛ إصدار معدّل من Gesso craft-suite."),
     ("Pasteboard Options", "خيارات مساحة اللصق"),
     ("Path", "مسار"),
     ("Place the insertion point in a table, or create one.", "ضع نقطة الإدراج داخل جدول أو أنشئ جدولًا."),

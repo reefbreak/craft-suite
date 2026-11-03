@@ -1076,7 +1076,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Page Numbering", "Нумерація сторінок"),
     ("Page layout for print and screen — fast, open and scriptable.", "Верстка для друку й екрана — швидка, відкрита, зі сценаріями."),
     ("Page · PPI", "Сторінка · PPI"),
-    ("Part of the ArtCraft suite of open creative tools.", "Частина набору відкритих творчих інструментів ArtCraft."),
+    ("Based on DesignCraft by the ArtCraft team; a modified build from the Gesso craft-suite.", "Засновано на DesignCraft від команди ArtCraft; змінена збірка з Gesso craft-suite."),
     ("Pasteboard Options", "Параметри монтажного столу"),
     ("Paths", "Контури"),
     ("Place the insertion point in a table, or create one.", "Установіть курсор у таблиці або створіть її."),

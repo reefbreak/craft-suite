@@ -139,7 +139,7 @@ pub fn show(app: &mut DesignApp, ctx: &egui::Context) {
             ));
             ui.label(crate::rtl::widget(
                 ui,
-                egui::RichText::new(crate::i18n::tr(&app.ui.language, "Part of the ArtCraft suite of open creative tools."))
+                egui::RichText::new(crate::i18n::tr(&app.ui.language, "Based on DesignCraft by the ArtCraft team; a modified build from the Gesso craft-suite."))
                     .size(12.0)
                     .color(t.text_dim),
             ));

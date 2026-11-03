@@ -1180,7 +1180,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
         "印刷・画面向けの高速なページレイアウトツールです。オープンで、スクリプトにも対応します。",
     ),
     ("Page · PPI", "ページ・PPI"),
-    ("Part of the ArtCraft suite of open creative tools.", "オープンな制作ツール群 ArtCraft の一部です。"),
+    ("Based on DesignCraft by the ArtCraft team; a modified build from the Gesso craft-suite.", "ArtCraft チームの DesignCraft をもとにした、Gesso craft-suite の改変版ビルドです。"),
     ("Pasteboard Options", "ペーストボードのオプション"),
     ("Paths", "パス"),
     ("Place the insertion point in a table, or create one.", "表内に挿入位置を置くか、表を作成してください。"),

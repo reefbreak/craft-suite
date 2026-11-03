@@ -1841,8 +1841,8 @@ lighting	Light	Lys
 	Select All Bound Objects	Markér alle bundne objekter
 	Multiple objects	Flere objekter
 	Graphics: {adapter}	Grafik: {adapter}
-	Part of ArtCraft. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorCraft.	Del af ArtCraft. MIT OR Apache-2.0. Skrifttyper: Source Sans 3, Inter, JetBrains Mono (OFL). Ikoner: Lucide (ISC) + VectorCraft.
-	Part of ArtCraft. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono, Noto Sans SC (OFL). Icons: Lucide (ISC) + VectorCraft.	Del af ArtCraft. MIT OR Apache-2.0. Skrifttyper: Source Sans 3, Inter, JetBrains Mono, Noto Sans SC (OFL). Ikoner: Lucide (ISC) + VectorCraft.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorCraft.	MIT OR Apache-2.0. Skrifttyper: Source Sans 3, Inter, JetBrains Mono (OFL). Ikoner: Lucide (ISC) + VectorCraft.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono, Noto Sans SC (OFL). Icons: Lucide (ISC) + VectorCraft.	MIT OR Apache-2.0. Skrifttyper: Source Sans 3, Inter, JetBrains Mono, Noto Sans SC (OFL). Ikoner: Lucide (ISC) + VectorCraft.
 	Version {version} — open-source vector illustration in pure Rust.	Version {version} — open source-vektorillustration i ren Rust.
 	Align to Page	Justér til side
 	Smooth Color	Jævn farve

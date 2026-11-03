@@ -1741,7 +1741,7 @@ lighting	Light	სინათლე
 	Select All Bound Objects	ყველა დაკავშირებული ობიექტის მონიშვნა
 	Multiple objects	რამდენიმე ობიექტი
 	Graphics: {adapter}	გრაფიკა: {adapter}
-	Part of ArtCraft. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorCraft.	ArtCraft-ის ნაწილი. MIT OR Apache-2.0. შრიფტები: Source Sans 3, Inter, JetBrains Mono (OFL). ხატულები: Lucide (ISC) + VectorCraft.
+	MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorCraft.	MIT OR Apache-2.0. შრიფტები: Source Sans 3, Inter, JetBrains Mono (OFL). ხატულები: Lucide (ISC) + VectorCraft.
 	Version {version} — open-source vector illustration in pure Rust.	ვერსია {version} — ღია კოდის ვექტორული ილუსტრაცია სუფთა Rust-ზე.
 	Align to Page	გვერდზე სწორება
 	Smooth Color	ფერის გლუვი გადასვლა

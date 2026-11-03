@@ -1011,7 +1011,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
         "გვერდების განლაგება ბეჭდვისა და ეკრანისთვის — სწრაფი, ღია და სკრიპტებით მართვადი.",
     ),
     ("Page · PPI", "გვერდი · PPI"),
-    ("Part of the ArtCraft suite of open creative tools.", "ArtCraft-ის ღია შემოქმედებითი ხელსაწყოების ნაკრების ნაწილი."),
+    ("Based on DesignCraft by the ArtCraft team; a modified build from the Gesso craft-suite.", "ეფუძნება ArtCraft-ის გუნდის DesignCraft-ს; Gesso craft-suite-ის შეცვლილი ანაწყობი."),
     ("Pasteboard Options", "სამუშაო არის პარამეტრები"),
     ("Paths", "ტრაექტორიები"),
     ("Place the insertion point in a table, or create one.", "მოათავსეთ კურსორი ცხრილში ან შექმენით ცხრილი."),

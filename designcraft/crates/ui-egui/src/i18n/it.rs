@@ -1079,7 +1079,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
         "Impaginazione per la stampa e lo schermo — veloce, aperta e automatizzabile con script.",
     ),
     ("Page · PPI", "Pagina · PPI"),
-    ("Part of the ArtCraft suite of open creative tools.", "Parte della suite ArtCraft di strumenti creativi aperti."),
+    ("Based on DesignCraft by the ArtCraft team; a modified build from the Gesso craft-suite.", "Basato su DesignCraft del team ArtCraft; una build modificata della Gesso craft-suite."),
     ("Pasteboard Options", "Opzioni tavolo di montaggio"),
     ("Paths", "Tracciati"),
     ("Place the insertion point in a table, or create one.", "Posiziona il punto di inserimento in una tabella o creane una."),

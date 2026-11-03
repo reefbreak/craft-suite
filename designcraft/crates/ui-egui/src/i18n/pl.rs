@@ -953,7 +953,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Page Numbering", "Numeracja stron"),
     ("Page layout for print and screen — fast, open and scriptable.", "Skład stron do druku i na ekran — szybki, otwarty i skryptowalny."),
     ("Page · PPI", "Strona · PPI"),
-    ("Part of the ArtCraft suite of open creative tools.", "Część pakietu ArtCraft otwartych narzędzi twórczych."),
+    ("Based on DesignCraft by the ArtCraft team; a modified build from the Gesso craft-suite.", "Oparty na DesignCraft zespołu ArtCraft; zmodyfikowana kompilacja z Gesso craft-suite."),
     ("Pasteboard Options", "Opcje stołu montażowego"),
     ("Paths", "Ścieżki"),
     ("Place the insertion point in a table, or create one.", "Umieść punkt wstawiania w tabeli albo utwórz tabelę."),
