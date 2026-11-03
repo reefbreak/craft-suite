@@ -1,8 +1,10 @@
-ArtCraft Launcher app icon (every file in this directory)
+Gesso Launcher app icon (every file in this directory)
 
-These files are the ArtCraft "A" mark (docs/brand/artcraft-mark-black.svg), rendered unmodified by
-packaging/icons.sh. The mark is a trademark of the ArtCraft Team. It is NOT open source and is NOT
-covered by ArtCraft Launcher's MIT or Apache-2.0 license.
+These files are the Gesso mark, copied from Gesso (gesso/gesso/assets/brand/ in the Gesso
+craft-suite) and rendered by packaging/icons.sh. They are original artwork for Gesso, not an
+ArtCraft mark, and are licensed like Gesso: MIT OR Apache-2.0, at your option (LICENSE-MIT,
+LICENSE-APACHE). Copyright (c) 2026 Jason Baldwin.
 
-Its terms are in docs/brand/LICENSE-brand.txt. In short: it may be used only unmodified, only as
-part of this repository and ArtCraft Launcher, and forks and modified versions must remove it.
+The Gesso name and mark identify Gesso and Gesso Launcher. A fork that is not Gesso should use its
+own name and icon. The upstream ArtCraft Launcher's icon (the ArtCraft "A" mark) is an ArtCraft
+trademark and is not included in this build: docs/brand/README.md.

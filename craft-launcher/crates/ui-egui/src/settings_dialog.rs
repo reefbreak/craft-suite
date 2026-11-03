@@ -50,15 +50,10 @@ impl LauncherUi {
         let size = sheet::size(ui.ctx(), vec2(1000.0, 820.0));
         ui.set_width(size.x);
         ui.set_max_height(size.y);
-        let hero_h = sheet::hero(
-            ui,
-            Some(crate::icons::artcraft_mark()),
-            tl!("Settings"),
-            &format!("ArtCraft Launcher {}", env!("CARGO_PKG_VERSION")),
-            |_| {},
-        );
+        let hero_h =
+            sheet::hero(ui, Some(crate::icons::gesso_mark()), tl!("Settings"), &format!("Gesso Launcher {}", env!("CARGO_PKG_VERSION")), |_| {});
 
-        let quit_width = widgets::button_width(ui, tl!("Quit ArtCraft Launcher"), 0.0);
+        let quit_width = widgets::button_width(ui, tl!("Quit Gesso Launcher"), 0.0);
         let done_width = widgets::button_width(ui, tl!("Done"), 90.0);
         let stack_actions = self.caps.manage_apps && quit_width + done_width + ui.spacing().item_spacing.x + 48.0 > size.x;
         let footer_h = if stack_actions { 2.0 * theme::CONTROL_H + ui.spacing().item_spacing.y } else { theme::CONTROL_H } + 32.0;
@@ -80,7 +75,7 @@ impl LauncherUi {
         egui::Frame::new().inner_margin(egui::Margin::symmetric(theme::PAD as i8, 16)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             let quit = |ui: &mut Ui, host: &mut dyn Host| {
-                if self.caps.manage_apps && widgets::button(ui, tl!("Quit ArtCraft Launcher"), Kind::Secondary, 0.0).clicked() {
+                if self.caps.manage_apps && widgets::button(ui, tl!("Quit Gesso Launcher"), Kind::Secondary, 0.0).clicked() {
                     host.quit();
                 }
             };
@@ -313,7 +308,7 @@ impl LauncherUi {
                 ));
             }
             if let Some(mut on) = host.login_item()
-                && ui.checkbox(&mut on, tl!("Start ArtCraft Launcher when I log in")).changed()
+                && ui.checkbox(&mut on, tl!("Start Gesso Launcher when I log in")).changed()
                 && let Err(e) = host.set_login_item(on)
             {
                 self.toast_from_ui(fmt(tl!("Couldn't change the login item: {e}"), &[("e", &e)]), true);

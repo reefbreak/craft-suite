@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build and package ArtCraft Launcher for FreeBSD:
+# Build and package Gesso Launcher for FreeBSD:
 #
-#   $DIST/artcraft-launcher-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
-#       artcraft-launcher-<version>-freebsd-x86_64/{bin, share/applications, share/icons,
-#       share/metainfo, share/doc/artcraft-launcher}
+#   $DIST/gesso-launcher-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
+#       gesso-launcher-<version>-freebsd-x86_64/{bin, share/applications, share/icons,
+#       share/metainfo, share/doc/gesso-launcher}
 #
 # Install by copying the tree's contents into /usr/local:
-#   tar -xzf artcraft-launcher-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+#   tar -xzf gesso-launcher-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
 #
 # Usage: packaging/freebsd/package.sh [--skip-build] [--dry-run]
 #   --dry-run   stage the tree from a stub binary and list it, without building (works on any OS)
@@ -16,8 +16,9 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 LINUX="$ROOT/packaging/linux"
-APP_ID=ai.storyteller.artcraft-launcher
-PKG=artcraft-launcher
+APP_ID=us.reefbreak.gesso-launcher
+PKG=artcraft-launcher   # cargo package (upstream name)
+NAME=gesso-launcher    # binary and file names
 
 SKIP_BUILD=0
 DRY_RUN=0
@@ -51,9 +52,9 @@ if [[ "$DRY_RUN" = 0 ]] && [[ "$(uname -s)" != FreeBSD ]]; then
   echo "error: build on FreeBSD (or pass --dry-run to check the tree layout)" >&2
   exit 2
 fi
-BASENAME="$PKG-$VERSION-freebsd-$ARCH"
+BASENAME="$NAME-$VERSION-freebsd-$ARCH"
 
-echo "==> ArtCraft Launcher $VERSION for FreeBSD $ARCH"
+echo "==> Gesso Launcher $VERSION for FreeBSD $ARCH"
 
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 if [[ "$SKIP_BUILD" = 0 ]]; then
@@ -72,26 +73,26 @@ if [[ "$DRY_RUN" = 1 ]]; then
   BIN="$WORK/stub-bin"
   OUT_DIR="$WORK"
   mkdir -p "$BIN"
-  printf '#!/bin/sh\necho "%s %s (dry-run stub)"\n' "$PKG" "$VERSION" >"$BIN/$PKG"
-  chmod 755 "$BIN/$PKG"
+  printf '#!/bin/sh\necho "%s %s (dry-run stub)"\n' "$NAME" "$VERSION" >"$BIN/$NAME"
+  chmod 755 "$BIN/$NAME"
 fi
 
 # ---- stage a /usr/local-style tree --------------------------------------------------------------
 # FreeBSD's install(1) has no -D: create the directories first.
 mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/metainfo" "$STAGE/share/icons" \
-  "$STAGE/share/doc/$PKG"
-install -m 755 "$BIN/$PKG" "$STAGE/bin/"
-strip "$STAGE/bin/$PKG" 2>/dev/null || true
+  "$STAGE/share/doc/$NAME"
+install -m 755 "$BIN/$NAME" "$STAGE/bin/"
+strip "$STAGE/bin/$NAME" 2>/dev/null || true
 # The desktop entry, metainfo and icons are the freedesktop files Linux ships.
 install -m 644 "$LINUX/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$ARTCRAFT_LAUNCHER_BUILD_DATE/g" \
   "$LINUX/$APP_ID.metainfo.xml.in" >"$STAGE/share/metainfo/$APP_ID.metainfo.xml"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/share/icons/"
-copy_docs "$STAGE/share/doc/$PKG"
+copy_docs "$STAGE/share/doc/$NAME"
 
-for f in "bin/$PKG" "share/applications/$APP_ID.desktop" \
+for f in "bin/$NAME" "share/applications/$APP_ID.desktop" \
   "share/icons/hicolor/256x256/apps/$APP_ID.png" "share/icons/hicolor/scalable/apps/$APP_ID.svg" \
-  "share/doc/$PKG/LICENSE-MIT" "share/doc/$PKG/LICENSE-APACHE"; do
+  "share/doc/$NAME/LICENSE-MIT" "share/doc/$NAME/LICENSE-APACHE"; do
   if [[ ! -e "$STAGE/$f" ]]; then echo "error: $f is missing from the package" >&2; exit 1; fi
 done
 

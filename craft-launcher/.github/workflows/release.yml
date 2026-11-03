@@ -23,7 +23,7 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
       app-name: craft-launcher
-      app-title: ArtCraft Launcher
+      app-title: Gesso Launcher
       version: ${{ inputs.version }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

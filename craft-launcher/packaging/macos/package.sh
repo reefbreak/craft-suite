@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build, sign and (optionally) notarize the macOS release artifact:
 #
-#   $DIST/artcraft-launcher-<version>-macos-<arch>.dmg   ArtCraft Launcher.app on a drag-to-Applications DMG
+#   $DIST/gesso-launcher-<version>-macos-<arch>.dmg   Gesso Launcher.app on a drag-to-Applications DMG
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
@@ -17,8 +17,9 @@ set -euo pipefail
 HERE="$ROOT/packaging/macos"
 
 # ---- app-specific values ----------------------------------------------------------------------
-PKG=artcraft-launcher          # cargo package and binary
-APP_NAME="ArtCraft Launcher"   # display name: bundle, executable, icon, DMG volume
+PKG=artcraft-launcher          # cargo package (upstream name)
+BIN=gesso-launcher             # binary, icon file and DMG file names
+APP_NAME="Gesso Launcher"      # display name: bundle, executable, icon, DMG volume
 
 ARCH=universal
 SKIP_BUILD=0
@@ -43,7 +44,7 @@ IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
 APP="$WORK/$APP_NAME.app"
-DMG="$DIST/$PKG-$VERSION-macos-$ARCH.dmg"
+DMG="$DIST/$BIN-$VERSION-macos-$ARCH.dmg"
 
 NOTARIZE=0
 if [[ "$IDENTITY" = "-" ]]; then
@@ -66,9 +67,9 @@ fi
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
 inputs=()
-for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$PKG"); done
-lipo -create -output "$WORK/bin/$PKG" "${inputs[@]}"
-lipo -info "$WORK/bin/$PKG"
+for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$BIN"); done
+lipo -create -output "$WORK/bin/$BIN" "${inputs[@]}"
+lipo -info "$WORK/bin/$BIN"
 
 # ---- signing helpers ---------------------------------------------------------------------------
 sign() {
@@ -112,12 +113,12 @@ stapler_retry() {
   exit 1
 }
 
-# ---- ArtCraft Launcher.app ---------------------------------------------------------------------
+# ---- Gesso Launcher.app ------------------------------------------------------------------------
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
-cp "$WORK/bin/$PKG" "$APP/Contents/MacOS/$APP_NAME"
-cp "$ROOT/assets/app-icon/$PKG.icns" "$APP/Contents/Resources/$APP_NAME.icns"
+cp "$WORK/bin/$BIN" "$APP/Contents/MacOS/$APP_NAME"
+cp "$ROOT/assets/app-icon/$BIN.icns" "$APP/Contents/Resources/$APP_NAME.icns"
 cp "$ROOT/NOTICE" "$APP/Contents/Resources/"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   -e "s/@BUILD_SHA@/${ARTCRAFT_LAUNCHER_BUILD_SHA:-unknown}/g" \

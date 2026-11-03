@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Build, sign and package ArtCraft Launcher for Windows.
+  Build, sign and package Gesso Launcher for Windows.
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
-    artcraft-launcher-<version>-windows-<arch>.msi            per-user installer with a setup wizard (WiX v5)
-    artcraft-launcher-<version>-windows-<arch>-portable.zip   artcraft-launcher.exe + portable.txt
+    gesso-launcher-<version>-windows-<arch>.msi               per-user installer with a setup wizard (WiX v5)
+    gesso-launcher-<version>-windows-<arch>-portable.zip      gesso-launcher.exe + portable.txt
 
   The binary links the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -28,8 +28,9 @@ $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 # ---- app-specific values ----------------------------------------------------------------------
-$Pkg = 'artcraft-launcher'          # cargo package and binary
-$AppName = 'ArtCraft Launcher'      # display name
+$Pkg = 'artcraft-launcher'          # cargo package (upstream name) and the .wxs/.wxl file names
+$Name = 'gesso-launcher'            # binary, icon and release file names
+$AppName = 'Gesso Launcher'         # display name
 
 function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Output "==> $What"
@@ -71,7 +72,7 @@ if (-not $SkipBuild) {
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
-$Exe = "$Pkg.exe"
+$Exe = "$Name.exe"
 
 # Check the PE header before packaging. Machine (COFF header) must match -Arch, so an x64 build
 # can never ship labelled arm64. Subsystem (optional header) must be 2 = Windows GUI, so no
@@ -98,29 +99,32 @@ Copy-Item (Join-Path $Bin $Exe) $Stage
 
 # ---- MSI ---------------------------------------------------------------------------------------
 # The setup wizard's art, drawn here (System.Drawing) in getartcraft.com's style so the MSI shows
-# ArtCraft rather than WiX's stock bitmaps. Both must be 24-bit BMPs:
+# Gesso Launcher rather than WiX's stock bitmaps. Both must be 24-bit BMPs:
 #   - dialog, 493x312: the Welcome and Finish pages' backdrop. Their text sits on the right, so
-#     that stays white; the left panel is ours: the blue ArtCraft mark, the white wordmark, a mono
-#     "Launcher" label and the Craft apps' icons in a hairline grid.
+#     that stays white; the left panel is ours: the Gesso app icon, "Gesso" in white (Inter), a
+#     mono "Launcher" label and the Craft apps' icons in a hairline grid.
 #   - banner, 493x58: across the top of the inner pages. The page title is drawn over its left
-#     side, so that stays white; the right end is a dark cell with the mark.
-# The ArtCraft mark and wordmark are drawn as supplied (docs/brand/LICENSE-brand.txt).
+#     side, so that stays white; the right end is a dark cell with the icon.
+# No ArtCraft mark or wordmark is drawn (docs/brand/README.md); the accent is Gesso's gold.
 function New-InstallerArt([string] $BannerOut, [string] $DialogOut) {
   Add-Type -AssemblyName System.Drawing
   $ink = [System.Drawing.ColorTranslator]::FromHtml('#121316')
-  $accent = [System.Drawing.ColorTranslator]::FromHtml('#2d81ff')
+  $accent = [System.Drawing.ColorTranslator]::FromHtml('#e8b04a')
   $muted = [System.Drawing.Color]::FromArgb(153, 242, 241, 238)
   $line = [System.Drawing.Color]::FromArgb(38, 242, 241, 238)
   # The Craft App Suite, in the launcher's order (crates/core/src/catalog.rs).
   $apps = 'photocraft', 'vectorcraft', 'filmcraft', 'lightcraft', 'pdfcraft', 'effectcraft',
     'designcraft', 'figcraft', 'wordcraft', 'soundcraft', 'deckcraft', 'cadcraft', 'gridcraft'
-  $mark = [System.Drawing.Image]::FromFile((Join-Path $Root 'assets\app-icon\hicolor\256x256\apps\ai.storyteller.artcraft-launcher.png'))
-  $wordmark = [System.Drawing.Image]::FromFile((Join-Path $Root 'docs\brand\artcraft-logo-white.png'))
+  $mark = [System.Drawing.Image]::FromFile((Join-Path $Root 'assets\app-icon\hicolor\256x256\apps\us.reefbreak.gesso-launcher.png'))
   $icons = $apps | ForEach-Object { [System.Drawing.Image]::FromFile((Join-Path $Root "assets\app-icons\$_.png")) }
   # The site's label face; GDI+ draws a variable font at its default instance (Regular).
   $fonts = New-Object System.Drawing.Text.PrivateFontCollection
   $fonts.AddFontFile((Join-Path $Root 'assets\fonts\GeistMono-Variable.ttf'))
   $labelFont = New-Object System.Drawing.Font $fonts.Families[0], 9, ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
+  # The name, in the site's display face (GDI+ again draws the variable font's default instance).
+  $nameFonts = New-Object System.Drawing.Text.PrivateFontCollection
+  $nameFonts.AddFontFile((Join-Path $Root 'assets\fonts\Inter-Variable.ttf'))
+  $nameFont = New-Object System.Drawing.Font $nameFonts.Families[0], 20, ([System.Drawing.FontStyle]::Bold), ([System.Drawing.GraphicsUnit]::Pixel)
   try {
     foreach ($spec in @(@($BannerOut, 493, 58), @($DialogOut, 493, 312))) {
       $bmp = New-Object System.Drawing.Bitmap $spec[1], $spec[2], ([System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
@@ -141,7 +145,9 @@ function New-InstallerArt([string] $BannerOut, [string] $DialogOut) {
           $g.FillRectangle($panel, 0, 0, 164, 312)
           $g.FillRectangle($stripe, 162, 0, 2, 312)
           $g.DrawImage($mark, 16, 18, 44, 44)
-          $g.DrawImage($wordmark, 22, 74, 120, [int](120 * $wordmark.Height / $wordmark.Width))
+          $nameBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(242, 241, 238))
+          $g.DrawString('Gesso', $nameFont, $nameBrush, 20, 68, [System.Drawing.StringFormat]::GenericTypographic)
+          $nameBrush.Dispose()
           # "LAUNCHER" in mono capitals, spaced like the site's labels (0.15 em).
           $brush = New-Object System.Drawing.SolidBrush $muted
           $x = 22.0
@@ -166,7 +172,7 @@ function New-InstallerArt([string] $BannerOut, [string] $DialogOut) {
       $bmp.Dispose()
     }
   } finally {
-    $labelFont.Dispose(); $fonts.Dispose(); $mark.Dispose(); $wordmark.Dispose()
+    $labelFont.Dispose(); $fonts.Dispose(); $nameFont.Dispose(); $nameFonts.Dispose(); $mark.Dispose()
     $icons | ForEach-Object { $_.Dispose() }
   }
 }
@@ -174,13 +180,13 @@ $Banner = Join-Path $Stage 'installer-banner.bmp'
 $Dialog = Join-Path $Stage 'installer-dialog.bmp'
 New-InstallerArt $Banner $Dialog
 
-$Msi = Join-Path $Dist "$Pkg-$Version-windows-$Arch.msi"
+$Msi = Join-Path $Dist "$Name-$Version-windows-$Arch.msi"
 & (Join-Path $PSScriptRoot 'check-icons.ps1')
 Invoke-Native 'wix build' {
   wix build (Join-Path $PSScriptRoot "$Pkg.wxs") -arch $Arch `
     -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext `
     -culture en-US -loc (Join-Path $PSScriptRoot "$Pkg.en-us.wxl") `
-    -d "Version=$MsiVersion" -d "DisplayVersion=$Version" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root "assets\app-icon\$Pkg.ico")" `
+    -d "Version=$MsiVersion" -d "DisplayVersion=$Version" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root "assets\app-icon\$Name.ico")" `
     -d "BannerBmp=$Banner" -d "DialogBmp=$Dialog" `
     -o $Msi
 }
@@ -192,7 +198,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Ms
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
 
 # ---- portable zip ------------------------------------------------------------------------------
-$Portable = Join-Path $TargetDir "windows-package\$Pkg-$Version-windows-$Arch-portable"
+$Portable = Join-Path $TargetDir "windows-package\$Name-$Version-windows-$Arch-portable"
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage $Exe) $Portable
@@ -200,10 +206,10 @@ foreach ($f in 'README.md', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUT
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }
-# portable.txt beside artcraft-launcher.exe switches on portable mode: settings and the download
+# portable.txt beside gesso-launcher.exe switches on portable mode: settings and the download
 # cache go to ArtCraftLauncherData\ next to the exe instead of %APPDATA%.
 Copy-Item (Join-Path $PSScriptRoot 'portable.txt') $Portable
-$Zip = Join-Path $Dist "$Pkg-$Version-windows-$Arch-portable.zip"
+$Zip = Join-Path $Dist "$Name-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip
 

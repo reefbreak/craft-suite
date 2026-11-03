@@ -1,7 +1,7 @@
-# Hosting ArtCraft Launcher for the web
+# Hosting Gesso Launcher for the web
 
-`artcraft-launcher-web-<version>.zip` (from the GitHub release, or `packaging/web/package.sh`)
-holds a static site in `artcraft-launcher-web-<version>/`:
+`gesso-launcher-web-<version>.zip` (from the GitHub release, or `packaging/web/package.sh`)
+holds a static site in `gesso-launcher-web-<version>/`:
 
 | File | What it is |
 |---|---|
@@ -63,7 +63,7 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
 ```html
 <iframe
   src="https://example.com/launcher/"
-  title="ArtCraft Launcher"
+  title="Gesso Launcher"
   style="width: 100%; height: 640px; border: 0;"
   allow="fullscreen"
   allowfullscreen>

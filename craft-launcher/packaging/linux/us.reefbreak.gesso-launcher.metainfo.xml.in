@@ -2,19 +2,20 @@
 <!-- AppStream metadata (software centres, Flathub). Template: package.sh and the Flatpak
      manifest substitute @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
 <component type="desktop-application">
-  <id>ai.storyteller.artcraft-launcher</id>
+  <id>us.reefbreak.gesso-launcher</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
-  <name>ArtCraft Launcher</name>
+  <name>Gesso Launcher</name>
   <summary>Install, update and launch the Craft App Suite</summary>
-  <developer id="ai.storyteller">
-    <name>Learning Machines LLC</name>
+  <developer id="us.reefbreak">
+    <name>Jason Baldwin</name>
   </developer>
   <description>
     <p>
-      ArtCraft Launcher lists every app in the Craft App Suite (PhotoCraft, LightCraft, FilmCraft,
+      Gesso Launcher lists every app in the Craft App Suite (PhotoCraft, LightCraft, FilmCraft,
       DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft, CADCraft,
-      SoundCraft and FigCraft), installs the right build for your computer, and keeps them up to date.
+      SoundCraft and FigCraft), installs the right build for your computer, and keeps them up to date. It is a modified build of ArtCraft Launcher by the ArtCraft team,
+      made for the Gesso craft-suite; it is not an official ArtCraft release.
     </p>
     <ul>
       <li>One place to find, install and open every Craft app</li>
@@ -22,8 +23,8 @@
       <li>Lives in the system tray and tells you when updates are ready</li>
     </ul>
   </description>
-  <launchable type="desktop-id">ai.storyteller.artcraft-launcher.desktop</launchable>
-  <icon type="stock">ai.storyteller.artcraft-launcher</icon>
+  <launchable type="desktop-id">us.reefbreak.gesso-launcher.desktop</launchable>
+  <icon type="stock">us.reefbreak.gesso-launcher</icon>
   <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
   <url type="homepage">https://getartcraft.com/apps</url>
   <url type="bugtracker">https://github.com/storytold/craft-launcher/issues</url>
@@ -37,7 +38,7 @@
     <keyword>launcher</keyword>
     <keyword>installer</keyword>
     <keyword>updater</keyword>
-    <keyword>artcraft</keyword>
+    <keyword>gesso</keyword>
   </keywords>
   <branding>
     <color type="primary" scheme_preference="light">#d9dce3</color>
@@ -48,7 +49,7 @@
     <control>pointing</control>
   </supports>
   <provides>
-    <binary>artcraft-launcher</binary>
+    <binary>gesso-launcher</binary>
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>

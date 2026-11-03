@@ -10,6 +10,6 @@ use artcraft_launcher_native::detect::windows::executable_version;
 
 #[test]
 fn the_launchers_own_product_version_is_read_from_its_exe() {
-    let exe = Path::new(env!("CARGO_BIN_EXE_artcraft-launcher"));
+    let exe = Path::new(env!("CARGO_BIN_EXE_gesso-launcher"));
     assert_eq!(executable_version(exe), version::parse(env!("CARGO_PKG_VERSION")));
 }

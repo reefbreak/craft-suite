@@ -12,10 +12,10 @@
 use std::process::Command;
 
 fn launcher() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_artcraft-launcher"))
+    Command::new(env!("CARGO_BIN_EXE_gesso-launcher"))
 }
 
-const VERSION_LINE: &str = concat!("artcraft-launcher ", env!("CARGO_PKG_VERSION"), "\n");
+const VERSION_LINE: &str = concat!("gesso-launcher ", env!("CARGO_PKG_VERSION"), "\n");
 
 #[test]
 fn the_version_is_printed_with_arguments_the_desktop_adds() {

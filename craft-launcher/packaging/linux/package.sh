@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build and package ArtCraft Launcher for Linux (<arch> is x86_64, aarch64 or riscv64):
+# Build and package Gesso Launcher for Linux (<arch> is x86_64, aarch64 or riscv64):
 #
-#   $DIST/artcraft-launcher-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
-#   $DIST/artcraft-launcher-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
-#   $DIST/artcraft-launcher-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
-#   $DIST/artcraft-launcher-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
-#   $DIST/artcraft-launcher-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
+#   $DIST/gesso-launcher-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
+#   $DIST/gesso-launcher-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
+#   $DIST/gesso-launcher-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
+#   $DIST/gesso-launcher-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
+#   $DIST/gesso-launcher-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
 #
 # Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar" or appimage,deb,rpm,tar]
 #
@@ -21,8 +21,9 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
-APP_ID=ai.storyteller.artcraft-launcher
-PKG=artcraft-launcher
+APP_ID=us.reefbreak.gesso-launcher
+PKG=artcraft-launcher   # cargo package (upstream name)
+NAME=gesso-launcher    # binary, package and file names
 # Verify a downloaded file's sha256 against its expected hex digest.
 check_sha256() {
   local expected="$1"
@@ -56,10 +57,10 @@ case "$ARCH" in
   aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-export ARTCRAFT_LAUNCHER_MAINTAINER="${ARTCRAFT_LAUNCHER_MAINTAINER:-ArtCraft Launcher maintainers <craft-launcher@storyteller.ai>}"
-BASENAME="$PKG-$VERSION-linux-$ARCH"
+export ARTCRAFT_LAUNCHER_MAINTAINER="${ARTCRAFT_LAUNCHER_MAINTAINER:-Jason Baldwin <jason@reefbreak.us>}"
+BASENAME="$NAME-$VERSION-linux-$ARCH"
 
-echo "==> ArtCraft Launcher $VERSION for Linux $ARCH ($FORMATS)"
+echo "==> Gesso Launcher $VERSION for Linux $ARCH ($FORMATS)"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   if [[ -n "${CROSS_TARGET:-}" ]]; then
@@ -74,16 +75,16 @@ STAGE="$WORK/root"
 rm -rf "$WORK"
 
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
-install -Dm755 "$BIN/$PKG" "$STAGE/usr/bin/$PKG"
-"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/$PKG" 2>/dev/null || true
+install -Dm755 "$BIN/$NAME" "$STAGE/usr/bin/$NAME"
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/$NAME" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 mkdir -p "$STAGE/usr/share/metainfo"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$ARTCRAFT_LAUNCHER_BUILD_DATE/g" \
   "$HERE/$APP_ID.metainfo.xml.in" >"$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
-mkdir -p "$STAGE/usr/share/doc/$PKG"
-copy_docs "$STAGE/usr/share/doc/$PKG"
+mkdir -p "$STAGE/usr/share/doc/$NAME"
+copy_docs "$STAGE/usr/share/doc/$NAME"
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"
@@ -133,7 +134,7 @@ if has appimage; then
     echo "no pinned AppImage runtime for $ARCH; build the AppImage on x86_64 or aarch64" >&2
     exit 2
   fi
-  APPDIR="$WORK/ArtCraftLauncher.AppDir"
+  APPDIR="$WORK/GessoLauncher.AppDir"
   cp -R "$STAGE" "$APPDIR"
   # AppRun is a script, not a symlink: it installs the .desktop entry and icons into
   # $XDG_DATA_HOME before launching, so Wayland compositors can resolve the window's
@@ -182,9 +183,10 @@ if has appimage; then
   # file and fetch only the blocks that changed in a newer release, through the .zsync published
   # next to each AppImage on GitHub Releases. `latest` is the newest published release that is
   # not a pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
-  # The repo is craft-launcher while the files are artcraft-launcher-*.
+  # The repo is craft-launcher while the files are gesso-launcher-* (so a build pointing at the
+  # upstream repo finds no ArtCraft Launcher AppImage to update to).
   REPO="${GITHUB_REPOSITORY:-storytold/craft-launcher}"
-  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|$PKG-*-linux-$ARCH.AppImage.zsync"
+  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|$NAME-*-linux-$ARCH.AppImage.zsync"
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
   # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
@@ -198,9 +200,9 @@ if has appimage; then
 fi
 
 if [[ -z "${CROSS_TARGET:-}" ]]; then
-  "$STAGE/usr/bin/$PKG" --version
+  "$STAGE/usr/bin/$NAME" --version
 elif [[ -n "${EMULATOR:-}" ]]; then
-  "$EMULATOR" "$STAGE/usr/bin/$PKG" --version
+  "$EMULATOR" "$STAGE/usr/bin/$NAME" --version
 fi
 echo "==> done"
 ls -lh "$DIST"

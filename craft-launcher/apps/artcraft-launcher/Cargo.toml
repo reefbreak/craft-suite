@@ -1,16 +1,21 @@
 [package]
 name = "artcraft-launcher"
-description = "ArtCraft Launcher: install, update and open the Craft App Suite"
+description = "Gesso Launcher: install, update and open the Craft App Suite (based on ArtCraft Launcher)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-default-run = "artcraft-launcher"
+default-run = "gesso-launcher"
 build = "build.rs"
 publish = false
 
 [lints]
 workspace = true
+
+# The package keeps its upstream name (artcraft-launcher) so merges stay easy; the binary is Gesso's.
+[[bin]]
+name = "gesso-launcher"
+path = "src/main.rs"
 
 [features]
 # Development only: install from `cargo xtask local serve` (see the README).
@@ -65,5 +70,5 @@ tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
 rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 
 [build-dependencies]
-# Icon + VERSIONINFO for artcraft-launcher.exe; build.rs only uses it when targeting Windows.
+# Icon + VERSIONINFO for gesso-launcher.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"

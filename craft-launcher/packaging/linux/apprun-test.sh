@@ -8,22 +8,22 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-APP_ID=ai.storyteller.artcraft-launcher
+APP_ID=us.reefbreak.gesso-launcher
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Fake AppDir with the real AppRun, .desktop template, icons, and a stub binary.
-APPDIR="$TMP/ArtCraftLauncher.AppDir"
+APPDIR="$TMP/GessoLauncher.AppDir"
 mkdir -p "$APPDIR/usr/bin"
 install -Dm755 "$HERE/AppRun" "$APPDIR/AppRun"
 install -Dm644 "$HERE/$APP_ID.desktop" "$APPDIR/usr/share/applications/$APP_ID.desktop"
 mkdir -p "$APPDIR/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$APPDIR/usr/share/icons/"
-printf '#!/bin/sh\necho "stub: $*"\n' >"$APPDIR/usr/bin/artcraft-launcher"
-chmod +x "$APPDIR/usr/bin/artcraft-launcher"
+printf '#!/bin/sh\necho "stub: $*"\n' >"$APPDIR/usr/bin/gesso-launcher"
+chmod +x "$APPDIR/usr/bin/gesso-launcher"
 
-APPIMAGE="$TMP/artcraft-launcher test.AppImage" # spaces on purpose: Exec must stay quoted
+APPIMAGE="$TMP/gesso-launcher test.AppImage" # spaces on purpose: Exec must stay quoted
 : >"$APPIMAGE"
 export APPIMAGE
 export HOME="$TMP/home"

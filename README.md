@@ -7,21 +7,21 @@ an official ArtCraft or Craft-apps release; see each app's `NOTICE`.
 Each app is a folder brought in with `git subtree`, so it keeps its own workspace, build and
 docs, and can be updated from its upstream.
 
-| Folder           | App            | Binary              | What it is                                        |
-|------------------|----------------|---------------------|---------------------------------------------------|
-| `gesso`          | Gesso          | `gesso`             | AI image, video and music generation (local mode) |
-| `filmcraft`      | FilmCraft      | `filmcraft`         | video editor                                      |
-| `effectcraft`    | EffectCraft    | `effectcraft`       | compositing and motion graphics                   |
-| `photocraft`     | PhotoCraft     | `photocraft`        | layered image editor                              |
-| `lightcraft`     | LightCraft     | `lightcraft`        | photo catalog and grading                         |
-| `vectorcraft`    | VectorCraft    | `vectorcraft`       | vector illustration                               |
-| `designcraft`    | DesignCraft    | `designcraft`       | page layout                                       |
-| `deckcraft`      | DeckCraft      | `deckcraft`         | presentations                                     |
-| `wordcraft`      | WordCraft      | `wordcraft`         | word processor (.docx)                            |
-| `gridcraft`      | GridCraft      | `gridcraft`         | spreadsheets                                      |
-| `cadcraft`       | CADCraft       | `cadcraft`          | CAD and drafting                                  |
-| `printcraft`     | PrintCraft     | `pdfcraft`          | PDF editor                                        |
-| `craft-launcher` | Craft Launcher | `artcraft-launcher` | launcher for the apps                             |
+| Folder           | App            | Binary           | What it is                                        |
+|------------------|----------------|------------------|---------------------------------------------------|
+| `gesso`          | Gesso          | `gesso`          | AI image, video and music generation (local mode) |
+| `filmcraft`      | FilmCraft      | `filmcraft`      | video editor                                      |
+| `effectcraft`    | EffectCraft    | `effectcraft`    | compositing and motion graphics                   |
+| `photocraft`     | PhotoCraft     | `photocraft`     | layered image editor                              |
+| `lightcraft`     | LightCraft     | `lightcraft`     | photo catalog and grading                         |
+| `vectorcraft`    | VectorCraft    | `vectorcraft`    | vector illustration                               |
+| `designcraft`    | DesignCraft    | `designcraft`    | page layout                                       |
+| `deckcraft`      | DeckCraft      | `deckcraft`      | presentations                                     |
+| `wordcraft`      | WordCraft      | `wordcraft`      | word processor (.docx)                            |
+| `gridcraft`      | GridCraft      | `gridcraft`      | spreadsheets                                      |
+| `cadcraft`       | CADCraft       | `cadcraft`       | CAD and drafting                                  |
+| `printcraft`     | PrintCraft     | `pdfcraft`       | PDF editor                                        |
+| `craft-launcher` | Gesso Launcher | `gesso-launcher` | launcher for the apps                             |
 
 ## Building
 

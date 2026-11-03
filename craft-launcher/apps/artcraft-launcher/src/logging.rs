@@ -217,7 +217,7 @@ pub fn install_panic_hook() {
         if log::log_enabled!(log::Level::Error) {
             log::error!("{report}");
         } else {
-            let _ = writeln!(std::io::stderr(), "artcraft-launcher: {report}");
+            let _ = writeln!(std::io::stderr(), "gesso-launcher: {report}");
         }
     }));
 }

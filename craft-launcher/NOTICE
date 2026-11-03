@@ -1,14 +1,29 @@
-ArtCraft Launcher
+Gesso Launcher
 Copyright (c) 2026 ArtCraft Team and the ArtCraft Launcher contributors.
+Modifications copyright (c) 2026 Jason Baldwin.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option
 (LICENSE-MIT, LICENSE-APACHE).
 
-The ArtCraft name, wordmark, logo and "A" mark (docs/brand/) are trademarks of the ArtCraft Team.
-They are NOT open source and are NOT covered by the MIT or Apache-2.0 license above. This includes
-everywhere ArtCraft Launcher shows them: the app icon (assets/app-icon/, the blue "A" mark), the
-ArtCraft logo in the window header and the "A" mark used as the tray / menu-bar icon
-(docs/brand/artcraft-mark-64.png, artcraft-mark-black-44.png).
-Their terms are in docs/brand/LICENSE-brand.txt; forks and modified versions must remove them.
+Gesso Launcher is a modified version of ArtCraft Launcher (https://github.com/storytold/craft-launcher)
+by the ArtCraft Team, built in the Gesso craft-suite. It is not an official ArtCraft Launcher or
+ArtCraft release and is not made, endorsed, sponsored or supported by the ArtCraft Team.
+
+Changes from ArtCraft Launcher (see the git history for every change): the app is renamed Gesso
+Launcher (window, tray, About, notifications, installers), with the binary gesso-launcher and the
+bundle / app id us.reefbreak.gesso-launcher; the app, tray, installer and DMG artwork use the Gesso
+mark instead of the ArtCraft "A" mark and wordmark.
+
+Trademarks
+
+The ArtCraft name, wordmark, logo and "A" mark are trademarks of the ArtCraft Team. They are NOT
+open source and are NOT covered by the MIT or Apache-2.0 license above; their terms are in
+docs/brand/LICENSE-brand.txt. As those terms require for modified versions, the mark and logo files
+have been removed from this build (docs/brand/README.md). The ArtCraft name appears only in plain
+text, to say what Gesso Launcher is based on and to label links to ArtCraft's website, accounts and
+release feed.
+
+The Gesso mark (assets/app-icon/) is original artwork for Gesso, MIT OR Apache-2.0 like Gesso
+(assets/app-icon/LICENSE.txt).
 
 Third-party material
 

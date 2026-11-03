@@ -1,16 +1,23 @@
 # AGENTS.md: guide for AI agents and contributors
 
-ArtCraft Launcher installs, updates and launches the **Craft App Suite** (PhotoCraft, LightCraft,
+Gesso Launcher (a modified build of ArtCraft Launcher in the Gesso craft-suite) installs, updates
+and launches the **Craft App Suite** (PhotoCraft, LightCraft,
 FilmCraft, DesignCraft, VectorCraft, PdfCraft, EffectCraft, WordCraft, DeckCraft, GridCraft,
 CADCraft, SoundCraft, FigCraft). It is written in **Rust only** (no JavaScript or TypeScript): the desktop
 app is native egui/eframe, and the web build is the same Rust compiled to WebAssembly (trunk +
 wasm-bindgen). **No Tauri, Electron or webview shells**, ever.
 
-The product name is always **ArtCraft Launcher** in user-facing text: UI, window titles, About,
-tray menu, notifications, installers, release names, docs prose. The suite is the **Craft App
-Suite**. Machine names stay lowercase: crates and binaries (`artcraft-launcher`,
-`artcraft-launcher-*`), file names, and the app id `ai.storyteller.artcraft-launcher`. Note the
-GitHub repo is `storytold/craft-launcher`, while every file and package is `artcraft-launcher-*`.
+The product name is always **Gesso Launcher** in user-facing text: UI, window titles, About,
+tray menu, notifications, installers, release names, docs prose. "ArtCraft" appears only in plain
+text, to say this build is based on ArtCraft Launcher and to label upstream links (getartcraft.com,
+its GitHub, Discord and social accounts, the ArtCraft API release feed); never add an ArtCraft logo
+or mark (`docs/brand/README.md`). The suite is the **Craft App Suite**. The binary is
+`gesso-launcher` and the bundle / app id `us.reefbreak.gesso-launcher`; packaged files are
+`gesso-launcher-*`. The crates keep their upstream names (`artcraft-launcher`,
+`artcraft-launcher-*`) so upstream merges stay easy, and so do the data and settings folders
+(`ArtCraft Launcher` / `artcraft-launcher`, eframe's `ai.storyteller.artcraft-launcher`). The
+launcher's own catalog entry (`LAUNCHER_ID`, `artcraft-launcher`) still names upstream's release
+assets on `storytold/craft-launcher`.
 
 Standards and learnings shared across the Craft apps live in `../craftrules` (read its
 `README.md` and `AGENTS.md`). Contribute reusable learnings there, never code.
@@ -92,7 +99,7 @@ Every user-facing string goes through `crates/ui-egui/src/i18n` (`tl!("…")` fo
 for `{placeholders}`, `tn` for counts). English in the code is the lookup key; adding a string
 means adding its row to every catalog marked `complete_menus` (the `*.tsv` files in
 `crates/ui-egui/src/i18n/`), which the i18n tests check. Translate clean-room from the meaning of
-the English text, never through another catalog. Product and app names (ArtCraft Launcher, Craft
+the English text, never through another catalog. Product and app names (Gesso Launcher, Craft
 App Suite, PhotoCraft…) stay in English.
 A CJK language is drawn with the system's own CJK font (`crates/ui-egui/src/cjk_font.rs`, desktop
 only; English where there is none): never bundle a CJK font, they are 10 MB and more.
@@ -100,11 +107,12 @@ only; English where there is none): never bundle a CJK font, they are 10 MB and 
 ### Other rules
 
 1. **Assets need attribution.** Every bundled asset gets a row in `ATTRIBUTION.md` (path, title,
-   author, source, license) in the same change. The ArtCraft name, logo and "A" mark in
-   `docs/brand/` (the header logo and the tray icon) are trademarks, **not MIT/Apache**
-   (`docs/brand/LICENSE-brand.txt`): use them exactly as supplied, never redraw or recolor them.
-2. **Icons are generated.** The app icon and the tray icon are the supplied ArtCraft "A" mark from
-   `docs/brand/` (a trademark, not MIT/Apache); never edit the renders by hand. Run `packaging/icons.sh` (needs `resvg`; runs on any OS) and commit the outputs.
+   author, source, license) in the same change. The ArtCraft name, logo and "A" mark are
+   trademarks, **not MIT/Apache** (`docs/brand/LICENSE-brand.txt`), and this modified build must
+   not ship them: `docs/brand/` keeps only the terms and a README saying why.
+2. **Icons are generated.** The app icon and the tray icons are the Gesso mark
+   (`assets/app-icon/gesso-launcher.svg`, copied from Gesso, and `gesso-mark-black.svg`; MIT OR
+   Apache-2.0); never edit the renders by hand. Run `packaging/icons.sh` (needs `resvg`; runs on any OS) and commit the outputs.
    `assets/app-icons/` is copied verbatim from each app's repo (`assets/app-icon/hicolor/128x128/apps/ai.storyteller.<app>.png`);
    refresh it from there, never redraw.
 3. **Never break wasm.** `cargo xtask wasm` must pass. File-system, process and OS code is
@@ -135,32 +143,33 @@ packaging/linux/AppRun` and `actionlint`.
 The version lives only in `[workspace.package] version` in the root `Cargo.toml`
 (`cargo xtask version`, `cargo xtask version set X.Y.Z[-pre]`). Pushing to the `release` branch runs
 `.github/workflows/release.yml`, which builds every platform and creates the draft GitHub Release
-**ArtCraft Launcher v<version>** with `SHA256SUMS.txt`. The canonical recipe is
+**Gesso Launcher v<version>** with `SHA256SUMS.txt` (upstream's workflow; it does not run in the suite). The canonical recipe is
 `../craftrules/release/playbook.md`; cutting a release is `../craftrules/release/cut-a-release.md`.
 
-Release assets (keep these names exact; the launcher's own self-update and the README rely on them):
+Packaged files (the packaging scripts write these names; upstream's releases, which self-update reads, are still `artcraft-launcher-<ver>-…`):
 
 | Platform | Files |
 |---|---|
-| Windows | `artcraft-launcher-<ver>-windows-{x64,x86,arm64}.msi`, `…-windows-{x64,x86,arm64}-portable.zip` |
-| macOS | `artcraft-launcher-<ver>-macos-universal.dmg` |
-| Linux | `artcraft-launcher-<ver>-linux-{x86_64,aarch64}.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}`, `artcraft-launcher-<ver>-linux-riscv64.{deb,rpm,tar.gz}` |
-| FreeBSD | `artcraft-launcher-<ver>-freebsd-x86_64.tar.gz` |
-| Web | `artcraft-launcher-web-<ver>.zip` |
+| Windows | `gesso-launcher-<ver>-windows-{x64,x86,arm64}.msi`, `…-windows-{x64,x86,arm64}-portable.zip` |
+| macOS | `gesso-launcher-<ver>-macos-universal.dmg` |
+| Linux | `gesso-launcher-<ver>-linux-{x86_64,aarch64}.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}`, `gesso-launcher-<ver>-linux-riscv64.{deb,rpm,tar.gz}` |
+| FreeBSD | `gesso-launcher-<ver>-freebsd-x86_64.tar.gz` |
+| Web | `gesso-launcher-web-<ver>.zip` |
 
 Packaging facts the code relies on:
 
 - The Windows MSI is **per-user** (no UAC prompt), by default into
-  `%LOCALAPPDATA%\Programs\ArtCraft Launcher`. Double-clicked it opens a WixUI setup wizard
+  `%LOCALAPPDATA%\Programs\Gesso Launcher`. Double-clicked it opens a WixUI setup wizard
   (Welcome; a folder page with a "Create a desktop shortcut" box; Ready; progress; Finish with
   "Launch"), whose art `package.ps1` draws at build time; self-update runs it with `/passive`, no
   wizard. The folder and the shortcut choice are recorded under
-  `HKCU\Software\Learning Machines LLC\ArtCraft Launcher` (`InstallDir`,
+  `HKCU\Software\Jason Baldwin\Gesso Launcher` (`InstallDir`,
   `DesktopShortcutChoice`) and reused by the next version, and `self_update.rs` reads `InstallDir`
-  to know the running copy came from the MSI. Its shortcuts set AppUserModelID
-  `ai.storyteller.artcraft-launcher`, which toast notifications need. `portable.txt` beside the exe switches on portable mode
+  to know the running copy came from the MSI (craft-update looks under the upstream key, so it
+  doesn't recognise this MSI). Its shortcuts set AppUserModelID
+  `us.reefbreak.gesso-launcher`, which toast notifications need. `portable.txt` beside the exe switches on portable mode
   (`ArtCraftLauncherData\` next to the exe).
-- The macOS bundle is `ArtCraft Launcher.app` (executable `Contents/MacOS/ArtCraft Launcher`), a
+- The macOS bundle is `Gesso Launcher.app` (executable `Contents/MacOS/Gesso Launcher`), a
   normal Dock app that can also sit in the menu bar: `LSUIElement` must never be set.
 - Linux: the tray uses StatusNotifierItem over D-Bus and notifications use
   `org.freedesktop.Notifications`, both in pure Rust (no GTK, appindicator or libdbus).
@@ -175,7 +184,7 @@ Packaging facts the code relies on:
   (SoundCraft's ALSA reaches the runtime's PulseAudio plugin through it); it also covers the
   microphone, which SoundCraft records through.
 - `build.rs` reads `ARTCRAFT_LAUNCHER_BUILD_SHA` / `ARTCRAFT_LAUNCHER_BUILD_DATE` and, on Windows,
-  embeds `assets/app-icon/artcraft-launcher.ico`, failing the build when
+  embeds `assets/app-icon/gesso-launcher.ico`, failing the build when
   `ARTCRAFT_LAUNCHER_REQUIRE_WINRES=1` and it can't.
 
 ## 5. Parallel agents

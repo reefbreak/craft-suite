@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn the_update_helper_exits_without_opening_the_launcher() {
-    let mut helper = Command::new(env!("CARGO_BIN_EXE_artcraft-launcher"))
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_gesso-launcher"))
         .arg("--finish-update")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

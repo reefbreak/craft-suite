@@ -1,4 +1,4 @@
-# Czech (cs) catalog for ArtCraft Launcher.
+# Czech (cs) catalog for Gesso Launcher.
 # Format: context<TAB>source<TAB>translation
 # Empty context = plain UI string (tl!, t). @id = command-id keyed. @plural = one|few|other.
 # @msg = status/error message template. Other context = disambiguation for tr_ctx.
@@ -60,7 +60,7 @@
 	Reinstall	Znovu nainstalovat
 	Uninstall…	Odinstalovat…
 	All releases	Všechna vydání
-	ArtCraft Launcher {version} is available.	Je k dispozici ArtCraft Launcher {version}.
+	Gesso Launcher {version} is available.	Je k dispozici Gesso Launcher {version}.
 	Dismiss	Skrýt
 	Update and restart	Aktualizovat a restartovat
 	A new version is available. Would you like to relaunch with the updated version?	Je k dispozici nová verze. Chcete aplikaci znovu spustit s aktualizovanou verzí?
@@ -71,7 +71,7 @@
 	Released {date}	Vydáno {date}
 	Open on GitHub	Otevřít na GitHubu
 	Close	Zavřít
-	ArtCraft Launcher {version}	ArtCraft Launcher {version}
+	Gesso Launcher {version}	Gesso Launcher {version}
 	Only when I ask	Pouze na vyžádání
 	Automatically download and install updates	Automaticky stahovat a instalovat aktualizace
 	Notify me when an installed app has an update	Upozornit, když má nainstalovaná aplikace aktualizaci
@@ -83,14 +83,14 @@
 	Updates always use the format an app was installed with.	Aktualizace vždy použijí formát, ve kterém byla aplikace nainstalována.
 	Running in the background	Běh na pozadí
 	Keep running in the tray when the window is closed	Po zavření okna ponechat spuštěné v oznamovací oblasti
-	ArtCraft Launcher is still running	ArtCraft Launcher stále běží
+	Gesso Launcher is still running	Gesso Launcher stále běží
 	It's in the tray: open it or quit it from the tray icon, or turn this off in the settings.	Je v oznamovací oblasti: otevřete ho nebo ukončete přes ikonu v ní, nebo to vypněte v nastavení.
 	Show the window on the current desktop	Zobrazit okno na aktuální ploše
-	Start ArtCraft Launcher when I log in	Spouštět ArtCraft Launcher po přihlášení
+	Start Gesso Launcher when I log in	Spouštět Gesso Launcher po přihlášení
 	Community	Komunita
 	Questions, ideas and news from the ArtCraft team	Dotazy, nápady a novinky od týmu ArtCraft
 	Appearance	Vzhled
-	Quit ArtCraft Launcher	Ukončit ArtCraft Launcher
+	Quit Gesso Launcher	Ukončit Gesso Launcher
 	Done	Hotovo
 	Uninstall {name}?	Odinstalovat {name}?
 	The app will be moved to the Trash. Your documents and settings stay.	Aplikace bude přesunuta do Koše. Vaše dokumenty a nastavení zůstanou zachovány.
@@ -124,7 +124,7 @@
 	Open link	Otevřít odkaz
 	Update	Aktualizovat
 	{name} icon	Ikona aplikace {name}
-	Loading ArtCraft Launcher…	Načítání aplikace ArtCraft Launcher…
+	Loading Gesso Launcher…	Načítání aplikace Gesso Launcher…
 	Cancel update	Zrušit aktualizaci
 	Stop waiting; the update can be started again later	Přestat čekat; aktualizaci lze spustit znovu později
 	Download again	Stáhnout znovu
@@ -197,7 +197,7 @@ month	Dec	12.
 	Version {version} installed	Nainstalována verze {version}
 	Version {latest}	Verze {latest}
 	No release published yet	Zatím nebylo zveřejněno žádné vydání
-	ArtCraft Launcher	ArtCraft Launcher
+	Gesso Launcher	Gesso Launcher
 	App	Aplikace
 	Latest	Nejnovější
 	Released	Vydáno
@@ -232,7 +232,7 @@ month	Dec	12.
 	Full changelog	Úplný přehled změn
 	link	odkaz
 	No apps match	Žádné aplikace neodpovídají hledání
-	Open ArtCraft Launcher to update.	Aktualizujte otevřením aplikace ArtCraft Launcher.
+	Open Gesso Launcher to update.	Aktualizujte otevřením aplikace Gesso Launcher.
 	{name} {v} is available	Je k dispozici {name} {v}
 	{count} updates are available	Počet dostupných aktualizací: {count}
 	These notes weren't fetched (GitHub's request limit was reached). They're on the release page.	Tyto poznámky se nepodařilo načíst (byl dosažen limit požadavků GitHubu). Najdete je na stránce vydání.
@@ -290,7 +290,7 @@ filter	Installed	Nainstalováno
 @id	launcher.notes	Co je nového
 @id	launcher.dismiss	Zavřít
 @id	settings.open	Nastavení
-@id	settings.quit	Ukončit ArtCraft Launcher
+@id	settings.quit	Ukončit Gesso Launcher
 @id	view.grid	Mřížka
 @id	view.table	Tabulka
 @id	filter.all	Vše
@@ -314,14 +314,14 @@ filter	Installed	Nainstalováno
 @id	linux.preferred_kind	Instalovat nové aplikace jako
 @id	tray.close_to_tray	Po zavření okna ponechat spuštěné v oznamovací oblasti
 @id	tray.show_on_current_desktop	Zobrazit okno na aktuální ploše
-@id	tray.login_item	Spouštět ArtCraft Launcher po přihlášení
+@id	tray.login_item	Spouštět Gesso Launcher po přihlášení
 @id	appearance.theme	Vzhled
-	Show ArtCraft Launcher	Zobrazit ArtCraft Launcher
+	Show Gesso Launcher	Zobrazit Gesso Launcher
 	Check for Updates	Zkontrolovat aktualizace
 	Visit getartcraft.com	Navštívit getartcraft.com
 	ArtCraft on GitHub	ArtCraft na GitHubu
 	Join the ArtCraft Discord	Připojit se na ArtCraft Discord
-@plural	ArtCraft Launcher · {n} update available|ArtCraft Launcher · {n} updates available	ArtCraft Launcher · {n} dostupná aktualizace|ArtCraft Launcher · {n} dostupné aktualizace|ArtCraft Launcher · {n} dostupných aktualizací
+@plural	Gesso Launcher · {n} update available|Gesso Launcher · {n} updates available	Gesso Launcher · {n} dostupná aktualizace|Gesso Launcher · {n} dostupné aktualizace|Gesso Launcher · {n} dostupných aktualizací
 	Install folder	Instalační složka
 	Default install folder	Výchozí instalační složka
 	System default	Výchozí nastavení systému
@@ -334,7 +334,7 @@ filter	Installed	Nainstalováno
 @msg	couldn't use install folder {path}: {reason}	instalační složku {path} nelze použít: {reason}
 @msg	this release has no AppImage for a custom install folder	toto vydání nemá AppImage pro vlastní instalační složku
 @msg	custom install folders aren't supported on this system	vlastní instalační složky nejsou v tomto systému podporovány
-@msg	{path} already exists and wasn't installed by ArtCraft Launcher	{path} již existuje a nebylo nainstalováno aplikací ArtCraft Launcher
+@msg	{path} already exists and wasn't installed by Gesso Launcher	{path} již existuje a nebylo nainstalováno aplikací Gesso Launcher
 @msg	couldn't move {path} to Trash ({reason}). Remove it in Finder instead.	{path} nelze přesunout do koše ({reason}). Odstraňte položku ve Finderu.
 	Apps are placed inside this folder.	Aplikace se umístí do této složky.
 	Replace what's there?	Nahradit, co tam je?

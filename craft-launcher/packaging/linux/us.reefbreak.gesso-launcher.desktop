@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Gesso Launcher
+GenericName=App Launcher
+Comment=Install, update and launch the Craft App Suite
+Exec=gesso-launcher
+TryExec=gesso-launcher
+Icon=us.reefbreak.gesso-launcher
+Terminal=false
+StartupNotify=true
+StartupWMClass=gesso-launcher
+Categories=Utility;PackageManager;
+Keywords=gesso;craft;launcher;installer;updater;photocraft;filmcraft;apps;

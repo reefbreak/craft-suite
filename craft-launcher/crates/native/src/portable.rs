@@ -494,7 +494,7 @@ mod tests {
         std::fs::create_dir_all(staging.join("backup")).unwrap();
         std::fs::write(staging.join("backup").join("artcraft-launcher.exe"), "0.1.0").unwrap();
         let zip = archive(dir.path(), "update.zip", &[("artcraft-launcher.exe", b"0.2.0")]);
-        let folder = dir.path().join("ArtCraft Launcher");
+        let folder = dir.path().join("Gesso Launcher");
         std::fs::create_dir_all(&folder).unwrap();
         let error = unpack_over(&zip, &staging, &folder, std::ffi::OsStr::new("artcraft-launcher.exe"), &|_| Ok(())).unwrap_err();
         assert!(error.contains("previous files"), "{error}");
@@ -507,7 +507,7 @@ mod tests {
     fn a_self_update_that_fails_validation_puts_the_previous_files_back() {
         let dir = tempfile::tempdir().unwrap();
         let staging = dir.path().join("launcher-update");
-        let folder = dir.path().join("ArtCraft Launcher");
+        let folder = dir.path().join("Gesso Launcher");
         std::fs::create_dir_all(&folder).unwrap();
         let exe = folder.join("artcraft-launcher.exe");
         std::fs::write(&exe, "old launcher").unwrap();

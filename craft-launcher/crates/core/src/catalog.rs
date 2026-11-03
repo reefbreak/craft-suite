@@ -168,12 +168,14 @@ pub const DISCORD_URL: &str = "https://discord.gg/artcraft";
 /// Deep link into the Discord application for the ArtCraft server invite.
 pub const DISCORD_APP_URL: &str = "discord://-/invite/artcraft";
 
-/// ArtCraft Launcher itself, described like a Craft App so it can update itself with the same
-/// machinery (asset names `artcraft-launcher-<ver>-…`, bundle id `ai.storyteller.artcraft-launcher`,
-/// `ArtCraft Launcher.app`). Not part of [`SUITE`].
+/// Gesso Launcher itself, described like a Craft App so it can update itself with the same
+/// machinery. Not part of [`SUITE`]. Its id, the asset stem and the repo are still the upstream
+/// ArtCraft Launcher's (asset names `artcraft-launcher-<ver>-…` on storytold/craft-launcher), so
+/// update checks look at upstream releases; Gesso Launcher's own bundle id is
+/// `us.reefbreak.gesso-launcher`.
 pub const LAUNCHER: CraftApp = app(
     "artcraft-launcher",
-    "ArtCraft Launcher",
+    "Gesso Launcher",
     "Installs and updates the Craft App Suite",
     [[0x0b, 0x0b, 0x0c], [0x0b, 0x0b, 0x0c], [0xf2, 0xf1, 0xee]],
     "storytold/craft-launcher",
