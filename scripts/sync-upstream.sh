@@ -2,13 +2,13 @@
 # Pulls each app's upstream into its folder (git subtree, squashed).
 #   scripts/sync-upstream.sh            every app
 #   scripts/sync-upstream.sh filmcraft  one app
-# Gesso comes from the reefbreak/artcraft fork (branch local-providers): ArtCraft renamed Gesso,
+# Gesso comes from the reefbreak/gesso fork (branch local-providers): ArtCraft renamed Gesso,
 # with the local-mode changes. Sync that fork with storytold/artcraft first, then run this.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 declare -A SOURCES=(
-  [gesso]="https://github.com/reefbreak/artcraft local-providers"
+  [gesso]="https://github.com/reefbreak/gesso local-providers"
   [filmcraft]="https://github.com/storytold/filmcraft main"
   [photocraft]="https://github.com/storytold/photocraft main"
   [vectorcraft]="https://github.com/storytold/vectorcraft main"
